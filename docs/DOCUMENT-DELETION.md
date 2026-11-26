@@ -3,8 +3,8 @@
 Status: Task 1 of [the plan](plans/20261125-permanent-document-deletion.md), 2026-11-26. This records, against the
 code as it stands, who reads, queues, references and writes a supporting document, and specifies the contracts the
 later tasks implement: the lock order, the version token, the staff-only access matrix, the exact in-use sources, the
-request budget and per-call timeouts, binary ownership, CDAM's permanent-delete semantics and the fence points. No
-route, migration or production code exists yet for this feature. Nothing here authorises deletion in any environment.
+request budget and per-call timeouts, binary ownership, CDAM's permanent-delete semantics and the fence points. Tasks 2-4
+add persistence, admission and cleanup (sections below); no HTTP route exists yet. Nothing here authorises deletion.
 
 ## At a glance
 
@@ -372,6 +372,74 @@ domain. There is no HTTP route yet (Task 6).
   - a document write committed while admission waits is `DOCUMENT_CHANGED`;
   - a replace, a soft removal and a locking move that wait on admission find nothing, and a new upload lands;
   - a read during admission is neither blocked nor refused, and a read after it is a 404.
+
+## Cleanup, recovery and completion (Task 4)
+
+`domain/documents/deletion/DocumentDeletions.delete` is the staff entry point. It refuses an active transaction,
+commits admission, then calls `DocumentDeletionWork.carryOut` on the same request within the budget, and answers the
+request as it then stands. There is still no HTTP route (Task 6).
+
+- **Claims.** A pass claims the request under a fresh owner with a lease (`recovery.lease`, default 2 min, which must
+  exceed the budget). The staff request claims its own request (`claim`). The sweep claims the soonest due one
+  (`claimNext`, `FOR UPDATE SKIP LOCKED`). Each claim counts a pass in `attempts`. A try, a failure and a release
+  are written only while `holds` (the request locked `FOR UPDATE`, owner matches, lease unexpired). A worker that
+  lost its lease stops.
+- **Receipts are kept whoever holds the claim.** `stepDone` writes from `Pending` regardless of the lease: a 204
+  forgotten would make the next worker re-send, and that second answer (404) proves nothing.
+- **Steps, in order, outside any transaction** (`DocumentDeletionRemote`, implemented by `storage/PermanentDocumentRemoval`):
+  - `CCD_REFERENCE`: `CaseDocumentsEvent.submit` with the case's other `Attached` rows read through the entity
+    restriction just before the call, so any fenced document is absent and two removals cannot put each other
+    back. The budget is asked again between start and submit.
+  - `CDAM_BINARY`: `storage/CdamPermanentDelete`, the only sender of `permanent=true`. It uses CDAM's own
+    `CaseDocumentClientApi`, built with Feign directly: `SpringMvcContract`, `NoConnectionRetry`'s OkHttp,
+    `Retryer.NEVER_RETRY`, connect 2 s and read 8 s. Answers are classified as in the table above.
+  - `LOCAL_FILE`: `LocalFilesystemDocumentStore.remove`. Deleted and already-absent are receipts. A missing root, an
+    I/O failure and a missing store are retried; an invalid key needs attention.
+- **Verdicts.**
+  - `DONE` moves on to the next step.
+  - `NOT_SENT` (the budget) leaves the request `InProgress`, due at once, with no try counted.
+  - `RETRY` counts a try and leaves the request `InProgress` after `retry-base` doubled per try (capped by
+    `retry-cap`). At `max-attempts` tries the step is `Failed` and the request `NeedsAttention` (`CCD_REFERENCE_FAILED`,
+    `CDAM_DELETE_FAILED` or `LOCAL_FILE_UNREMOVED`).
+  - `FAILED` needs attention at once (`CDAM_PURGE_UNPROVEN`, `CDAM_PERMISSION`, …).
+  - A request needing attention is never claimed again; it keeps every unconfirmed locator.
+- **Budget.** `request-budget` (20 s) runs from the start of the staff request. A CDAM call starts only if 10 s
+  (connect plus read) is left. A CCD call starts only if `ccd-call-allowance` (15 s) is left, and the submission
+  only if 15 s is still left after the start.
+- **Completion** (`DocumentDeletionCompletion`, `MANDATORY`) runs once every step is `Done`, in one transaction. It
+  locks the case `FOR NO KEY UPDATE`, then the document `FOR UPDATE`, then checks `holds` on the request. It then:
+  - deletes the row;
+  - writes `DOCUMENT_DELETED` under the original requester (`AuditActor(requestedBySubject, requestedByName)`), with
+    the reason and the request id in its detail, `documentTypeId`, and the metadata's last values;
+  - writes the note `Document <name> (<id>) permanently deleted. Reason: <reason>` through `NoteService` under the
+    requester, which audits `NOTE_CREATED`;
+  - writes the receipt (`complete`: `Completed`, reason, name and locators cleared).
+  No V50 tombstone is written: nothing is left to inventory, and the request is the evidence. Any failure rolls all
+  of it back and is retried. After `max-attempts` passes the request needs attention, `LOCAL_COMPLETION_REFUSED`.
+- **Recovery sweep.** `DocumentDeletionRecovery`, on `DocumentDeletionRecoveryTimer` every `recovery.interval` (1 min),
+  claims at most `recovery.batch-size` (10) requests per run, each within a fresh budget. It is on by default
+  (`DOCUMENT_DELETION_RECOVERY_ENABLED`) and independent of `APPLICATION_DELETION_WORKER_ENABLED`. Off, a request
+  stays `InProgress` and is never reported `Completed`. Tests switch it off in `AbstractPostgresContainerTest` and
+  run it themselves.
+- **Monitoring.** The gauge `deedpoll.documents.deletion.requests{status}` (`storage/DocumentDeletionMetrics`).
+  Any `NeedsAttention` needs a person; an `InProgress` count that does not fall means the sweep needs looking at.
+  Log lines name the request id, the step kind and an allowlisted code, never a locator, a reason or a provider message.
+- **Configuration** (`deedpoll.documents.deletion.*`; env `DOCUMENT_DELETION_*`): `request-budget` (at most 25 s),
+  `cdam-connect-timeout`, `cdam-read-timeout`, `ccd-call-allowance`, and `recovery.{enabled, interval, batch-size,
+  lease, max-attempts, retry-base, retry-cap}`. The chart sets none of them (`DeploymentChartConformanceTest`), so no
+  chart version bump was needed.
+- **Proof.** `DocumentDeletionWorkTest` (18 tests, Postgres) covers:
+  - success: metadata only, CCD then CDAM, and the filesystem end to end through `DocumentDeletions` with a replay;
+  - uncertain answers: unknown then the sweep, a lost answer then a 404, 403, a CCD refusal, exhausted tries;
+  - the budget: run out before a step, and out of time between a CCD start and its submission;
+  - crashes and leases: a crash after a receipt, a lease lost during an unknown answer, a receipt after a lost lease
+    with a single completion, racing sweeps;
+  - local completion: a failed note recovered, a failed `DOCUMENT_DELETED` exhausted;
+  - two concurrent removals not reattaching each other.
+
+  Alongside it: `CdamPermanentDeleteTest` (WireMock: 204, 404, 403, 401, 400, 408/429/5xx, read timeout, reset, no
+  tokens, unreachable), `PermanentDocumentRemovalTest`, `DocumentDeletionPropertiesTest`,
+  `DocumentDeletionRecoveryTimerTest`, and the chart conformance tests.
 
 ## Contract alignment with the plan
 

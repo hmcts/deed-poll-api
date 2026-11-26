@@ -261,14 +261,14 @@ repositories identified in Task 1, and document tests.
 **Files:** new document deletion steps, recovery sweep and finalisation, CdamDocumentStore/permanent seam, CCD document projection,
 NoteService/DocumentUploadAudit adapters, scheduler/config and their tests.
 
-- [ ] Implement the in-request remote steps within the budget, permanent CDAM and verified filesystem cleanup,
+- [x] Implement the in-request remote steps within the budget, permanent CDAM and verified filesystem cleanup,
   metadata-only deletion, current CCD reference removal, and the recovery sweep for interrupted requests. No
   best-effort success and no Restore action.
-- [ ] Implement atomic local completion with correctly attributed DOCUMENT_DELETED and one case note containing
+- [x] Implement atomic local completion with correctly attributed DOCUMENT_DELETED and one case note containing
   document identity and the entered reason. Audit/note failures leave a recoverable incomplete request.
-- [ ] Test 204 success, all ambiguous replay/404 cases, 401/403/outage/5xx, crashes after remote success, lease loss,
+- [x] Test 204 success, all ambiguous replay/404 cases, 401/403/outage/5xx, crashes after remote success, lease loss,
   duplicate finalisation by the request and the sweep, forced note/audit failure, and concurrent document removals not reattaching each other.
-- [ ] Add configuration, health and monitoring, and chart tests plus a version bump if values change. The recovery
+- [x] Add configuration, health and monitoring, and chart tests plus a version bump if values change. The recovery
   sweep is on by default (it only resumes admitted requests); a disabled sweep leaves `InProgress`, never a false
   `Completed`. Do not tie it to application deletion's cleanup flag.
 
@@ -350,6 +350,18 @@ deed preparation, staging read-back and `DocumentService.updateDocument`/`remove
 with the same body answers the existing request (requester kept); a second key with another body is the document's 404.
 Tests: `DocumentDeletionServiceTest` (18, Postgres, including five two-transaction races, stable over three reruns).
 Gates: build green (test 5749, 0 failed, 1 skipped; integration 31, 0 failed), Checkstyle OK, diff check clean.
+Task 4 (2026-11-26): `DocumentDeletions` (the staff entry point: admission, then the work in the same request),
+`DocumentDeletionWork` (claims, leases, the 20 s budget, step verdicts, completion under case, document, request),
+`DocumentDeletionCompletion` (row delete, `DOCUMENT_DELETED` and the note under the requester, the receipt),
+`DocumentDeletionRecovery` and its timer (on by default, `DOCUMENT_DELETION_RECOVERY_ENABLED`), `DocumentDeletionProperties`,
+`storage/CdamPermanentDelete` (the only `permanent=true` sender: CDAM's client built with its own 2 s/8 s timeouts, no
+resend), `storage/PermanentDocumentRemoval` (CCD list read fresh before the event; verified file removal) and the
+`deedpoll.documents.deletion.requests{status}` gauge. Recorded deltas: success is `Completed` (Task 6's 200, as Task 1
+recorded); a receipt is recorded even after a lost lease; no V50 tombstone for a permanent deletion. No chart value
+changed, so no chart bump. Tests: `DocumentDeletionWorkTest` (18, Postgres), `CdamPermanentDeleteTest` (14, WireMock),
+`PermanentDocumentRemovalTest` (4), `DocumentDeletionPropertiesTest` (6), `DocumentDeletionRecoveryTimerTest` (3), two chart
+conformance tests. Gates: build green (test 5798, 0 failed, 1 skipped; integration 31, 0 failed), Checkstyle OK, diff
+check clean.
 Previously: this plan had been checked structurally, not executed. Record source SHAs, contract proof, migrations,
 task validation, spec artifact, review findings and outstanding deployment evidence here. Keep checkboxes inside tasks.
 

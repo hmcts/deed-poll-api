@@ -45,6 +45,8 @@ public abstract class AbstractPostgresContainerTest {
         registry.add("deedpoll.masters.emails-enabled", () -> false);
         // And the application deletion worker, which is off by default anyway: tests run it themselves.
         registry.add("deedpoll.deletion.cleanup.enabled", () -> false);
+        // And the document deletion recovery sweep, which is on by default: tests run it themselves.
+        registry.add("deedpoll.documents.deletion.recovery.enabled", () -> false);
         registry.add("spring.datasource.url", () -> JDBC_URL);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);

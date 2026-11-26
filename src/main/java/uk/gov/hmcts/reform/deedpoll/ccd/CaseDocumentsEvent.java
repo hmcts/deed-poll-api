@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.storage.DocumentStoreProperties;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 /**
  * Sets a case's supporting documents in CCD by event, which is how a CDAM upload is attached (plan 03a, task 4).
@@ -82,6 +83,20 @@ public class CaseDocumentsEvent {
      * @throws RuntimeException whatever {@code createEvent} threw, for the caller to classify
      */
     public void submit(String caseReference, List<SupportingDocumentReference> documents) {
+        submit(caseReference, documents, () -> true);
+    }
+
+    /**
+     * {@link #submit(String, List)}, asking {@code mayStillSubmit} between the start and the submission: a permanent
+     * document deletion's budget may have run out while the start was answered, and a submission started then could
+     * outlast the staff member's request.
+     *
+     * @return true once submitted; false when {@code mayStillSubmit} said no, so nothing was submitted
+     * @throws NotSubmitted if the tokens or the start failed, so nothing was submitted
+     * @throws RuntimeException whatever {@code createEvent} threw, for the caller to classify
+     */
+    public boolean submit(String caseReference, List<SupportingDocumentReference> documents,
+                          BooleanSupplier mayStillSubmit) {
         String user;
         String service;
         CaseDataContent payload;
@@ -100,7 +115,11 @@ public class CaseDocumentsEvent {
         } catch (RuntimeException failure) {
             throw new NotSubmitted("Not submitted: " + CcdLinkingService.describe(failure));
         }
+        if (!mayStillSubmit.getAsBoolean()) {
+            return false;
+        }
         ccd.createEvent(user, service, caseReference, payload);
+        return true;
     }
 
     CaseDataContent content(List<SupportingDocumentReference> documents, String eventToken) {

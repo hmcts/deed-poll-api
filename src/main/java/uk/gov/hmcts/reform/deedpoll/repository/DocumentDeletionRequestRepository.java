@@ -128,6 +128,12 @@ public class DocumentDeletionRequestRepository {
             timestamp(request.requestedAt()), timestamp(request.requestedAt())) == 1;
     }
 
+    /** The request with this id, whichever case it is of: the work's own read, never a caller's. */
+    public Optional<DocumentDeletionRequest> findById(UUID id) {
+        return jdbc.query("select " + COLUMNS + " from deedpoll_document_deletion_request where id = ?",
+                          REQUEST, id).stream().findFirst();
+    }
+
     /** The request with this id, but only as the named case's: a status read is case-scoped. */
     public Optional<DocumentDeletionRequest> findByCaseAndId(String caseId, UUID id) {
         return jdbc.query("select " + COLUMNS + " from deedpoll_document_deletion_request where case_id = ? and id = ?",
@@ -210,6 +216,157 @@ public class DocumentDeletionRequestRepository {
             jdbc.update("update deedpoll_document_deletion_step set locator = null where request_id = ?", id);
         }
         return updated == 1;
+    }
+
+    // --- carrying a request out (Task 4) ------------------------------------------------------------------------
+
+    /**
+     * A document's last metadata, for {@code DOCUMENT_DELETED}'s values, locked {@code FOR UPDATE} in the completion's
+     * transaction after the case. Read natively past the entity restriction; never the locators or the hash token.
+     */
+    public record DocumentRecord(String id, String name, String direction, String documentTypeId,
+                                 String originalName, String mimeType, Long sizeBytes) {
+
+        @Override
+        public String toString() {
+            return "DocumentRecord[id=" + id + "]";
+        }
+    }
+
+    /**
+     * Claims this request for {@code owner} until {@code leaseUntil}, if it is {@code InProgress} and nobody else
+     * holds an unexpired claim on it, counting the pass.
+     *
+     * @return whether this call claimed it
+     */
+    public boolean claim(UUID id, UUID owner, LocalDateTime now, LocalDateTime leaseUntil) {
+        return jdbc.update("""
+            update deedpoll_document_deletion_request
+               set owner = ?, lease_until = ?, attempts = attempts + 1
+             where id = ? and status = 'InProgress' and (owner is null or lease_until <= ?)
+            """, owner, timestamp(leaseUntil), id, timestamp(now)) == 1;
+    }
+
+    /**
+     * The recovery sweep's claim: the soonest due {@code InProgress} request nobody holds an unexpired claim on,
+     * {@code FOR UPDATE SKIP LOCKED} so pods never share one. Joins the caller's short transaction.
+     *
+     * @return the claimed request's id, or empty when nothing is due
+     */
+    public Optional<UUID> claimNext(UUID owner, LocalDateTime now, LocalDateTime leaseUntil) {
+        return jdbc.query("""
+            with due as (
+                select id from deedpoll_document_deletion_request
+                 where status = 'InProgress' and next_attempt_at <= ? and (owner is null or lease_until <= ?)
+                 order by next_attempt_at, id
+                 limit 1
+                 for update skip locked)
+            update deedpoll_document_deletion_request request
+               set owner = ?, lease_until = ?, attempts = request.attempts + 1
+              from due where request.id = due.id
+            returning request.id
+            """, (row, index) -> row.getObject("id", UUID.class), timestamp(now), timestamp(now), owner,
+            timestamp(leaseUntil)).stream().findFirst();
+    }
+
+    /**
+     * Whether {@code owner}'s claim on the request is still unexpired, locking the request {@code FOR UPDATE} until
+     * the caller's transaction ends.
+     */
+    public boolean holds(UUID id, UUID owner, LocalDateTime now) {
+        return Boolean.TRUE.equals(jdbc.query("""
+            select owner = ? and lease_until > ? and status = 'InProgress' as held
+              from deedpoll_document_deletion_request where id = ? for update
+            """, (row, index) -> row.getBoolean("held"), owner, timestamp(now), id).stream().findFirst()
+            .orElse(false));
+    }
+
+    /**
+     * A step's receipt: {@code Done} with its outcome, only from {@code Pending}. Written whether or not the writer
+     * still holds the claim, because a receipt is a fact about the far side: recording it stops a later worker
+     * re-sending a delete whose second answer could prove nothing.
+     *
+     * @return whether this call recorded it
+     */
+    public boolean stepDone(UUID stepId, String outcome, LocalDateTime now) {
+        return jdbc.update("""
+            update deedpoll_document_deletion_step
+               set state = 'Done', outcome = ?, attempts = attempts + 1, completed_at = ?
+             where id = ? and state = 'Pending'
+            """, outcome, timestamp(now), stepId) == 1;
+    }
+
+    /**
+     * A try that confirmed nothing; the step stays {@code Pending} with its locator.
+     */
+    public int stepTried(UUID stepId, String outcome) {
+        return jdbc.update("""
+            update deedpoll_document_deletion_step set outcome = ?, attempts = attempts + 1
+             where id = ? and state = 'Pending'
+            """, outcome, stepId);
+    }
+
+    /** A refusal another try will not fix; the step keeps its locator for whoever looks at it. */
+    public int stepFailed(UUID stepId, String outcome, boolean counted) {
+        return jdbc.update("""
+            update deedpoll_document_deletion_step
+               set state = 'Failed', outcome = ?, attempts = attempts + ?
+             where id = ? and state = 'Pending'
+            """, outcome, counted ? 1 : 0, stepId);
+    }
+
+    /**
+     * Gives {@code owner}'s claim up, leaving the request {@code InProgress} (due at {@code nextAttemptAt}) or
+     * {@code NeedsAttention} with its failure. Never {@code Completed}: only {@link #complete} writes that.
+     *
+     * @return whether the claim was still this owner's
+     */
+    public boolean release(UUID id, UUID owner, DocumentDeletionStatus status, String failure,
+                           LocalDateTime nextAttemptAt) {
+        if (status == DocumentDeletionStatus.Completed) {
+            throw new IllegalArgumentException("Only completion completes a document deletion request");
+        }
+        return jdbc.update("""
+            update deedpoll_document_deletion_request
+               set owner = null, lease_until = null, status = ?, failure = ?, next_attempt_at = ?
+             where id = ? and owner = ? and status = 'InProgress'
+            """, status.name(), status == DocumentDeletionStatus.NeedsAttention ? failure : null,
+            status == DocumentDeletionStatus.InProgress ? timestamp(nextAttemptAt) : null, id, owner) == 1;
+    }
+
+    /**
+     * The case row, {@code FOR NO KEY UPDATE}: the completion's first lock, as admission's order has it.
+     */
+    public boolean lockCase(String caseId) {
+        return !jdbc.query("select id from deedpoll_deedpoll where id = ? for no key update",
+                           (row, index) -> row.getString("id"), caseId).isEmpty();
+    }
+
+    /**
+     * The document's metadata, locked {@code FOR UPDATE}, after the case and before the request.
+     */
+    public Optional<DocumentRecord> lockDocumentRecord(String caseId, String documentId) {
+        return jdbc.query("""
+            select id, name, direction::text as direction, "documentTypeId", "originalName", "mimeType", "sizeBytes"
+              from deedpoll_supportingdocument where id = ? and "deedPollId" = ? for update
+            """, (row, index) -> new DocumentRecord(
+                row.getString("id"), row.getString("name"), row.getString("direction"),
+                row.getString("documentTypeId"), row.getString("originalName"), row.getString("mimeType"),
+                row.getObject("sizeBytes") == null ? null : row.getLong("sizeBytes")),
+            documentId, caseId).stream().findFirst();
+    }
+
+    /** Deletes the document's row; V49's and V51's fences allow a delete. */
+    public int deleteDocument(String caseId, String documentId) {
+        return jdbc.update("delete from deedpoll_supportingdocument where id = ? and \"deedPollId\" = ?",
+                           documentId, caseId);
+    }
+
+    /** How many requests are in this status: a bounded label for the gauge, nothing else. */
+    public long countByStatus(DocumentDeletionStatus status) {
+        Long found = jdbc.queryForObject("select count(*) from deedpoll_document_deletion_request where status = ?",
+                                         Long.class, status.name());
+        return found == null ? 0 : found;
     }
 
     private static Timestamp timestamp(LocalDateTime value) {

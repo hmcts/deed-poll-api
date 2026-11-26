@@ -224,6 +224,26 @@ class DeploymentChartConformanceTest {
             .doesNotContain("CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"values.yaml", "values.aat.template.yaml", "values.preview.template.yaml"})
+    @DisplayName("no values file sets the document deletion sweep or its budget: the yaml defaults hold everywhere")
+    void noValuesFileConfiguresDocumentDeletion(String file) throws IOException {
+        assertThat(read(CHART_DIR.resolve(file)))
+            .as("%s must not set DOCUMENT_DELETION_*: the recovery sweep only resumes admitted requests and is on by "
+                + "default, and switching it off leaves them InProgress; a budget change is a reviewed yaml change",
+                file)
+            .doesNotContain("DOCUMENT_DELETION_");
+    }
+
+    @Test
+    @DisplayName("document deletion's recovery sweep is on by default, and is not application deletion's switch")
+    void documentDeletionRecoveryDefaultsOn() throws IOException {
+        assertThat(read(APPLICATION_YAML))
+            .contains("enabled: ${DOCUMENT_DELETION_RECOVERY_ENABLED:true}")
+            .contains("request-budget: ${DOCUMENT_DELETION_REQUEST_BUDGET:20s}")
+            .contains("lease: ${DOCUMENT_DELETION_RECOVERY_LEASE:PT2M}");
+    }
+
     @Test
     @DisplayName("application deletion is off unless configured: the worker defaults false and the SDK task off")
     void applicationDeletionDefaultsOff() throws IOException {
