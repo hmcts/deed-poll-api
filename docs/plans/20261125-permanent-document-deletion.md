@@ -223,12 +223,12 @@ Generate the full OpenAPI artifact using OpenAPIPublisherTest and OPENAPI_OUTPUT
 
 **Read:** all Context paths; pinned CDAM/client/DM Store code; both completed application deletion plans and tests.
 
-- [ ] Record execution SHAs and baseline gates; write `docs/DOCUMENT-DELETION.md` with every reader, queued consumer,
+- [x] Record execution SHAs and baseline gates; write `docs/DOCUMENT-DELETION.md` with every reader, queued consumer,
   reference owner and writer of a document, including preview streaming lifetime and already-copied provider bytes.
-- [ ] Specify shared lock order, the version token, the staff-only access matrix (no judicial route), the exact
+- [x] Specify shared lock order, the version token, the staff-only access matrix (no judicial route), the exact
   in-use sources found in the code, the request budget and per-call timeouts, binary
   ownership, permanent CDAM success/replay/404 semantics and native-SQL/JPA fence points against actual code.
-- [ ] Add/locate a stubbed proof of permanent CDAM deletion and safe retry. Document external permissions/modes and
+- [x] Add/locate a stubbed proof of permanent CDAM deletion and safe retry. Document external permissions/modes and
   unsupported outcomes as activation blockers. Do not replace permanent deletion with soft deletion or a guessed API.
 
 ### Task 2: Add request, reason, version, use and audit persistence
@@ -325,7 +325,14 @@ documents, application restore rules and historical soft-delete evidence remain 
 
 ## Execution notes
 
-Not started. This plan has been checked structurally, not executed. Record source SHAs, contract proof, migrations,
+Task 1 (2026-11-26): execution SHA `068e047` on `origin/master` `edb7052`; CDAM clone `fa77104` and `origin/master`
+`da4723e` (the latter grants `deed_poll_api` UPDATE on `DEEDPOLL`; the clone does not), dm-store `8b01cdd1` and
+`origin/master` `916193a`. Contracts in `docs/DOCUMENT-DELETION.md`; stubbed proof
+`storage/CdamPermanentDeleteContractTest` (12 tests: 204 is the only receipt, 404 is never one, a lost answer is
+re-sent safely). Gates: build green (test 5682/0 failed/1 skipped, integration 31/0), Checkstyle OK, diff check clean.
+Recorded deltas: success is 200 with a body (Task 4's "204" read as that case); open questions for Steve on deleting a
+generated deed (the V26 reservation survives it) and on a `Failed` row's unattached CDAM copy.
+Previously: this plan had been checked structurally, not executed. Record source SHAs, contract proof, migrations,
 task validation, spec artifact, review findings and outstanding deployment evidence here. Keep checkboxes inside tasks.
 
 ## Post-Completion
