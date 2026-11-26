@@ -219,7 +219,8 @@ public class DocumentStorageStates {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean attachedOnTheCase(String deedPollId, String documentId, UUID cdamDocumentId) {
-        Optional<DeedPollSupportingDocument> found = documents.findByIdAndDeedPollIdForUpdate(documentId, deedPollId);
+        Optional<DeedPollSupportingDocument> found =
+            documents.findUnfencedByIdAndDeedPollIdForUpdate(documentId, deedPollId);
         if (found.isEmpty()) {
             return false;
         }
@@ -310,7 +311,7 @@ public class DocumentStorageStates {
     }
 
     private DeedPollSupportingDocument lock(Claim claim) {
-        return documents.findByIdAndDeedPollIdForUpdate(claim.documentId(), claim.deedPollId())
+        return documents.findUnfencedByIdAndDeedPollIdForUpdate(claim.documentId(), claim.deedPollId())
             .orElseThrow(() -> gone(claim));
     }
 

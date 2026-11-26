@@ -138,7 +138,7 @@ class DocumentStorageStatesTest {
     @Test
     @DisplayName("a row that is not this case's, or is gone, is left alone")
     void anotherCasesRow() {
-        when(documents.findByIdAndDeedPollIdForUpdate("document-1", RECORD)).thenReturn(Optional.empty());
+        when(documents.findUnfencedByIdAndDeedPollIdForUpdate("document-1", RECORD)).thenReturn(Optional.empty());
 
         assertThat(states.attachedOnTheCase(RECORD, "document-1", CDAM_ID)).isFalse();
     }
@@ -193,7 +193,7 @@ class DocumentStorageStatesTest {
         row.setCdamDocumentId(cdamId);
         row.setCdamHashToken(state.holdsHashToken() ? HASH : null);
         row.setOriginalName(id + ".pdf");
-        when(documents.findByIdAndDeedPollIdForUpdate(id, RECORD)).thenReturn(Optional.of(row));
+        when(documents.findUnfencedByIdAndDeedPollIdForUpdate(id, RECORD)).thenReturn(Optional.of(row));
         return row;
     }
 

@@ -340,6 +340,39 @@ Run it with `./gradlew test --tests "uk.gov.hmcts.reform.deedpoll.storage.CdamPe
   `deedpoll_document_deletion_fence` trigger refuses an INSERT or UPDATE of a named document, and an email insert
   whose personalisation names one on the same case. Recovery reads the row natively through `fencedDocument`.
 
+## Admission (Task 3)
+
+`domain/documents/deletion/DocumentDeletionService.request` admits, and `read` answers the status, both in the
+domain. There is no HTTP route yet (Task 6).
+
+- **Order.** The staff role (`requireAnyRole` over `StaffArea.CASEWORKER`'s four roles, before anything is read), the
+  subject, the body, then the case as the caller sees it (fenced by an application deletion: 404). Then the case
+  `FOR UPDATE`, and the application fence again (`APPLICATION_DELETION_PENDING`). Then a replay by key. Then a request
+  another key already admitted for the document: the same body is that request, with its requester kept, and any other
+  body is the document's 404. Then the document `FOR UPDATE` (`DocumentDeletionAdmissionRepository.lockDocument`,
+  native). Then the refusals in this order: `DOCUMENT_CHANGED`, `DOCUMENT_STORAGE_UNRESOLVED`, `DOCUMENT_SHARED`,
+  `DOCUMENT_IN_USE`.
+- **Writes**, in one transaction: the request, its steps (`CCD_REFERENCE` only for a linked case, then `CDAM_BINARY`
+  for `Attached`; `LOCAL_FILE` for `Local` with a key; none for metadata only), and `DOCUMENT_DELETION_REQUESTED`
+  under the caller with the request's id and reason and no values. A failed audit insert leaves nothing.
+- **Store reach.** `DocumentStore.serves` decides. A `Local` file on a CDAM deployment, or an `Attached` document on a
+  filesystem deployment, is `DOCUMENT_STORAGE_UNRESOLVED`.
+- **In use.** The keys come from `EmailTemplate.documentKeys()` over every template
+  (`DocumentDeletionService.documentKeys`).
+- **Fence, asked after the lock.** `DeedPollSupportingDocumentRepository.findUnfencedByIdAndDeedPollIdForUpdate` locks
+  the row and then asks `hasDocumentDeletionRequest` in a fresh statement. A locking read that waited re-checks only
+  the row in its old snapshot, so the entity restriction alone would let it through. It replaces the plain locking read
+  in `DocumentStorageStates` (both moves), `DeedPreparations.requireCurrent`/`verifyAndRelease` and
+  `OwnedStaging.verifyAndConsume`. `DocumentService.updateDocument` and `removeDocument` now lock through it too, so
+  neither the patch nor the internal soft removal can reach a document whose permanent deletion was admitted.
+- **Proof.** `DocumentDeletionServiceTest` (18 tests, Postgres). Its races use two transactions and wait on
+  `pg_stat_activity`:
+  - an email naming the document that commits first makes admission `DOCUMENT_IN_USE` with nothing written;
+  - an email that waits on admission is refused at commit by V51's trigger, while one naming a sibling lands;
+  - a document write committed while admission waits is `DOCUMENT_CHANGED`;
+  - a replace, a soft removal and a locking move that wait on admission find nothing, and a new upload lands;
+  - a read during admission is neither blocked nor refused, and a read after it is a 404.
+
 ## Contract alignment with the plan
 
 The routes sit beside today's resources: `POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests`

@@ -221,7 +221,7 @@ public class OwnedStaging {
         }
         transaction.executeWithoutResult(status -> {
             Stage current = lock(owner, stage.id());
-            var document = documents.findByIdAndDeedPollIdForUpdate(stage.documentId(), stage.caseId())
+            var document = documents.findUnfencedByIdAndDeedPollIdForUpdate(stage.documentId(), stage.caseId())
                 .orElseThrow(OwnedStaging::missing);
             if (document.getStorageState() != DocumentStorageState.Attached
                 || !Objects.equals(document.getCdamDocumentId(), download.document().getCdamDocumentId())) {

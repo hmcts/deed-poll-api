@@ -248,11 +248,11 @@ Generate the full OpenAPI artifact using OpenAPIPublisherTest and OPENAPI_OUTPUT
 **Files:** new deletion service, DocumentService/storage states, the notification, deed-preparation and staging
 repositories identified in Task 1, and document tests.
 
-- [ ] Enforce staff access (no judicial route), parent/document ownership and deletion fences in the domain;
+- [x] Enforce staff access (no judicial route), parent/document ownership and deletion fences in the domain;
   implement admission, replay, version and body conflicts. No privileged DELETE_DOCUMENT grant.
-- [ ] Check the Task 1 in-use sources under the case and document locks; fence reads, previews, downloads and new email
+- [x] Check the Task 1 in-use sources under the case and document locks; fence reads, previews, downloads and new email
   sends naming the document from admission. No leases on readers.
-- [ ] Prove the races deterministically across two transactions: admission versus a new email enqueue naming the
+- [x] Prove the races deterministically across two transactions: admission versus a new email enqueue naming the
   document, versus an upload/replace/attach, and versus a read; a queued send refuses as `DOCUMENT_IN_USE` with no side
   effects; a read after admission is refused; another document on the same application stays usable.
 
@@ -342,6 +342,14 @@ cascades with its case. Tests: `DocumentDeletionMigrationTest` (12, Postgres), `
 `DocumentDeletionFingerprintTest` (2), `AuditEntryDocumentDeletionDetailTest` (3); `SdkMigrationOrderTest` now covers
 V1–V51, `DeedPollSchemaHealthTest` the two tables, and `DeletionFenceTest` the 14 fence triggers. Gates: build green
 (test 5731, 0 failed, 1 skipped; integration 31, 0 failed), Checkstyle OK, diff check clean.
+Task 3 (2026-11-26): `DocumentDeletionService` (admission and status read in the domain, staff roles only, no new
+capability), `DocumentDeletionRefusal`/`DocumentDeletionConflictError`, and
+`repository/DocumentDeletionAdmissionRepository` (native document lock, shared-binary and the three in-use
+questions). The document fence is asked after the lock through `DeedPollSupportingDocumentRepository.findUnfencedByIdAndDeedPollIdForUpdate`, now used by the storage moves,
+deed preparation, staging read-back and `DocumentService.updateDocument`/`removeDocument`. Recorded delta: a second key
+with the same body answers the existing request (requester kept); a second key with another body is the document's 404.
+Tests: `DocumentDeletionServiceTest` (18, Postgres, including five two-transaction races, stable over three reruns).
+Gates: build green (test 5749, 0 failed, 1 skipped; integration 31, 0 failed), Checkstyle OK, diff check clean.
 Previously: this plan had been checked structurally, not executed. Record source SHAs, contract proof, migrations,
 task validation, spec artifact, review findings and outstanding deployment evidence here. Keep checkboxes inside tasks.
 

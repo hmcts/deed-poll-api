@@ -69,6 +69,29 @@ public interface DeedPollSupportingDocumentRepository extends JpaRepository<Deed
     Optional<DeedPollSupportingDocument> findByIdAndDeedPollIdForUpdate(@Param("id") String id,
                                                                        @Param("deedPollId") String deedPollId);
 
+    /**
+     * Whether a permanent document deletion request (V51) names the document: a fresh statement, so a request
+     * committed before it is seen.
+     */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM deedpoll_document_deletion_request WHERE document_id = :id)",
+           nativeQuery = true)
+    boolean hasDocumentDeletionRequest(@Param("id") String id);
+
+    /**
+     * {@link #findByIdAndDeedPollIdForUpdate}, then the document deletion fence in a statement of its own. A locking
+     * read that waited for admission's document lock re-checks only the row it waited for, in the snapshot it took
+     * before waiting, so the entity restriction's {@code NOT EXISTS} still sees no request; the fresh statement after
+     * the lock does (plan 20261125-permanent-document-deletion, Task 3). Every writer that locks a document without
+     * first holding its case's lock asks through here; V51's deferred trigger is the backstop for one that does not.
+     *
+     * @return the locked document, or empty if there is none or a document deletion request names it
+     */
+    default Optional<DeedPollSupportingDocument> findUnfencedByIdAndDeedPollIdForUpdate(String id,
+                                                                                       String deedPollId) {
+        return findByIdAndDeedPollIdForUpdate(id, deedPollId)
+            .filter(found -> !hasDocumentDeletionRequest(found.getId()));
+    }
+
     /** Every document on one case in the given storage state, oldest first. */
     List<DeedPollSupportingDocument> findByDeedPollIdAndStorageStateOrderByCreatedOnAsc(String deedPollId,
                                                                                         DocumentStorageState state);
