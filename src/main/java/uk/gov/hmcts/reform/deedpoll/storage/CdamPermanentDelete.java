@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.storage;
 import feign.Feign;
 import feign.FeignException;
 import feign.Request;
+import feign.Response;
 import feign.RetryableException;
 import feign.Retryer;
 import org.springframework.beans.factory.ObjectProvider;
@@ -18,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionFa
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRemote.StepOutcome;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -38,7 +40,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Answers a {@link StepOutcome}, never throws for what CDAM said, and never repeats CDAM's words:
  * <ul>
- *   <li>{@code 2xx} is the receipt, {@code DELETED};</li>
+ *   <li>{@code 204} is the receipt, {@code DELETED}; any other {@code 2xx} is unknown and retried
+ *       ({@link #receiptOnly});</li>
  *   <li>{@code 404} proves nothing (already purged, soft-deleted elsewhere, or never there) and needs a person,
  *       {@link DocumentDeletionFailure#CDAM_PURGE_UNPROVEN};</li>
  *   <li>{@code 403} is CDAM's service permission, {@link DocumentDeletionFailure#CDAM_PERMISSION};</li>
@@ -51,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 @ConditionalOnProperty(name = DocumentStoreProperties.STORE_PROPERTY, havingValue = DocumentStoreProperties.CDAM)
 public class CdamPermanentDelete {
 
+    private static final int NO_CONTENT = 204;
     private static final int NOT_FOUND = 404;
     private static final int FORBIDDEN = 403;
     private static final int UNAUTHORISED = 401;
@@ -79,11 +83,40 @@ public class CdamPermanentDelete {
     static CaseDocumentClientApi client(String cdamUrl, Duration connect, Duration read) {
         return Feign.builder()
             .contract(new SpringMvcContract())
-            .client(new NoConnectionRetry().enrich((feign.Client) new feign.okhttp.OkHttpClient()))
+            .client(receiptOnly(new NoConnectionRetry().enrich((feign.Client) new feign.okhttp.OkHttpClient())))
             .options(new Request.Options(connect.toMillis(), TimeUnit.MILLISECONDS, read.toMillis(),
                                          TimeUnit.MILLISECONDS, false))
             .retryer(Retryer.NEVER_RETRY)
             .target(CaseDocumentClientApi.class, cdamUrl + "/cases/documents");
+    }
+
+    /**
+     * {@code delegate}, except that a {@code 2xx} other than {@code 204} is not a receipt. The client interface's
+     * {@code deleteDocument} is {@code void}, so Feign would answer any {@code 2xx} alike; this turns the rest into
+     * {@link NotAReceipt}, which Feign raises as a {@link RetryableException}: unknown, and tried again, whose second
+     * answer (a {@code 404}) then needs a person rather than reading as a purge.
+     */
+    static feign.Client receiptOnly(feign.Client delegate) {
+        return (request, options) -> {
+            Response response = delegate.execute(request, options);
+            int status = response.status();
+            if (status >= 200 && status < 300 && status != NO_CONTENT) {
+                response.close();
+                throw new NotAReceipt();
+            }
+            return response;
+        };
+    }
+
+    /**
+     * CDAM answered a {@code 2xx} that is not {@code 204}: the delete may or may not have happened.
+     */
+    static final class NotAReceipt extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        NotAReceipt() {
+            super("CDAM's answer to a permanent delete was not 204");
+        }
     }
 
     /** One permanent delete, as the system user with the api's S2S token. */
@@ -100,7 +133,7 @@ public class CdamPermanentDelete {
             client.deleteDocument(user, service, cdamDocumentId, true);
             return StepOutcome.done("DELETED");
         } catch (RetryableException unknown) {
-            return StepOutcome.retry("UNKNOWN");
+            return StepOutcome.retry(unknown.getCause() instanceof NotAReceipt ? "NOT_A_RECEIPT" : "UNKNOWN");
         } catch (FeignException answered) {
             return classify(answered.status());
         } catch (RuntimeException unknown) {

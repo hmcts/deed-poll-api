@@ -41,6 +41,7 @@ four management-information reads that need `VIEW_MANAGEMENT_INFORMATION` (see
 [Management information](#management-information)),
 three Delivery Manager-only application-deletion operations that need `DELETE_APPLICATION` (see
 [Deleting an application](#deleting-an-application)),
+two document-deletion operations any staff role may call (see [Deleting a document](#deleting-a-document)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -1042,7 +1043,7 @@ There are two Kubernetes probes and they deliberately do not check the same thin
 ```
   {"status":"UP","components":{
     "db":{"status":"UP"},
-    "deedPollSchema":{"status":"UP","details":{"tables":25}},
+    "deedPollSchema":{"status":"UP","details":{"tables":36}},
     "readinessState":{"status":"UP"}}}
 ```
 

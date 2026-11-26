@@ -20,7 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionTestDocumentType;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRemote.StepOutcome;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionService.DocumentDeletionCommand;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletions.Outcome;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionService.Admission;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository;
@@ -40,6 +40,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -141,7 +142,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         String documentId = document(caseId, "Local", null, null);
         DocumentDeletionRequest admitted = admission.request(CASEWORKER, caseId, documentId, command()).request();
 
-        assertThat(work.carryOut(admitted.id(), work.deadline())).contains(DocumentDeletionStatus.Completed);
+        assertThat(carriedOut(admitted.id(), work.deadline())).contains(DocumentDeletionStatus.Completed);
 
         assertThat(remote.calls).isEmpty();
         assertCompletedOnce(caseId, documentId, admitted.id());
@@ -158,7 +159,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         remote.ccd.add(StepOutcome.done("SUBMITTED"));
         remote.cdam.add(StepOutcome.done("DELETED"));
 
-        assertThat(work.carryOut(requestId, work.deadline())).contains(DocumentDeletionStatus.Completed);
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.Completed);
 
         assertThat(remote.calls).containsExactly("CCD:" + reference, "CDAM:" + cdamId);
         assertCompletedOnce(caseId, documentId, requestId);
@@ -181,14 +182,14 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         String documentId = document(caseId, "Local", key, null);
         DocumentDeletionCommand command = command();
 
-        Outcome outcome = deletions.delete(CASEWORKER, caseId, documentId, command);
+        Admission outcome = deletions.delete(CASEWORKER, caseId, documentId, command);
 
         assertThat(outcome.admitted()).isTrue();
         assertThat(outcome.request().status()).isEqualTo(DocumentDeletionStatus.Completed);
         assertThat(file).doesNotExist();
         assertCompletedOnce(caseId, documentId, outcome.request().id());
 
-        Outcome replay = deletions.delete(CASEWORKER, caseId, documentId, command);
+        Admission replay = deletions.delete(CASEWORKER, caseId, documentId, command);
         assertThat(replay.admitted()).isFalse();
         assertThat(replay.request().id()).isEqualTo(outcome.request().id());
         assertThat(replay.request().status()).isEqualTo(DocumentDeletionStatus.Completed);
@@ -217,7 +218,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         remote.cdam.add(StepOutcome.retry("UNKNOWN"));
         remote.cdam.add(StepOutcome.done("DELETED"));
 
-        assertThat(work.carryOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
         DocumentDeletionStep cdamStep = step(requestId, DocumentDeletionStepKind.CDAM_BINARY);
         assertThat(cdamStep.state()).isEqualTo(DocumentDeletionStepState.Pending);
         assertThat(cdamStep.attempts()).isOne();
@@ -265,7 +266,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         remote.ccd.add(StepOutcome.done("SUBMITTED"));
         remote.cdam.add(StepOutcome.failed("FORBIDDEN", DocumentDeletionFailure.CDAM_PERMISSION));
 
-        assertThat(work.carryOut(requestId, work.deadline())).contains(DocumentDeletionStatus.NeedsAttention);
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.NeedsAttention);
 
         assertNeedsAttention(caseId, documentId, requestId, DocumentDeletionFailure.CDAM_PERMISSION);
         assertThat(step(requestId, DocumentDeletionStepKind.CCD_REFERENCE).state())
@@ -323,7 +324,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         String documentId = document(caseId, "Attached", null, cdamId);
         UUID requestId = admitted(caseId, documentId, null, cdamId, null);
 
-        assertThat(work.carryOut(requestId, clock.get().plusSeconds(5))).contains(DocumentDeletionStatus.InProgress);
+        assertThat(carriedOut(requestId, clock.get().plusSeconds(5))).contains(DocumentDeletionStatus.InProgress);
         assertThat(remote.calls).isEmpty();
         assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).attempts()).isZero();
         assertThat(requests.findById(requestId).orElseThrow().nextAttemptAt()).isEqualTo(clock.get());
@@ -344,7 +345,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         remote.during = () -> clock.set(clock.get().plusSeconds(10));
         remote.ccd.add(StepOutcome.done("SUBMITTED"));
 
-        assertThat(work.carryOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
 
         assertThat(remote.ccd).as("the scripted submission was never used").hasSize(1);
         assertThat(step(requestId, DocumentDeletionStepKind.CCD_REFERENCE).attempts()).isZero();
@@ -410,7 +411,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         };
         remote.cdam.add(StepOutcome.done("DELETED"));
 
-        assertThat(work.carryOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
         assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).state())
             .isEqualTo(DocumentDeletionStepState.Done);
         assertThat(deletedEvents(caseId)).as("the request's own worker lost the claim and completed nothing")
@@ -421,7 +422,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
 
         assertThat(remote.calls).hasSize(1);
         assertCompletedOnce(caseId, documentId, requestId);
-        assertThat(work.carryOut(requestId, work.deadline())).contains(DocumentDeletionStatus.Completed);
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.Completed);
         assertCompletedOnce(caseId, documentId, requestId);
     }
 
@@ -460,7 +461,7 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         remote.cdam.add(StepOutcome.done("DELETED"));
         failing("deedpoll_notes", "document_deletion_test_note_failure", "NEW.note LIKE 'Document %'");
 
-        assertThat(work.carryOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
         assertThat(count("SELECT count(*) FROM deedpoll_supportingdocument WHERE id = ?", documentId)).isOne();
         assertThat(deletedEvents(caseId)).isEmpty();
         assertThat(requests.findById(requestId).orElseThrow().reason()).isPresent();
@@ -490,6 +491,78 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         }
 
         assertNeedsAttention(caseId, documentId, requestId, DocumentDeletionFailure.LOCAL_COMPLETION_REFUSED);
+        assertThat(count("SELECT count(*) FROM deedpoll_notes WHERE \"deedPollId\" = ?", caseId)).isZero();
+    }
+
+    @Test
+    @DisplayName("completion counts its own failures: passes spent on remote retries do not use up its tries")
+    void completionBudgetIsItsOwn() {
+        String caseId = fixture(null);
+        UUID cdamId = UUID.randomUUID();
+        String documentId = document(caseId, "Attached", null, cdamId);
+        final UUID requestId = admitted(caseId, documentId, null, cdamId, null);
+        for (int i = 1; i < MAX_ATTEMPTS; i++) {
+            remote.cdam.add(StepOutcome.retry("UNKNOWN"));
+        }
+        remote.cdam.add(StepOutcome.done("DELETED"));
+        failing("deedpoll_audit_event", "document_deletion_test_audit_failure", "NEW.action = 'DOCUMENT_DELETED'");
+
+        work.carryOut(requestId, work.deadline());
+        for (int i = 1; i < MAX_ATTEMPTS; i++) {
+            clock.set(clock.get().plusHours(2));
+            assertThat(recovery.run()).isOne();
+        }
+
+        DocumentDeletionRequest afterFirstFailure = requests.findById(requestId).orElseThrow();
+        assertThat(afterFirstFailure.attempts()).isEqualTo(MAX_ATTEMPTS);
+        assertThat(afterFirstFailure.status()).isEqualTo(DocumentDeletionStatus.InProgress);
+
+        jdbc.execute("DROP TRIGGER document_deletion_test_audit_failure ON deedpoll_audit_event");
+        clock.set(clock.get().plusHours(2));
+        assertThat(recovery.run()).isOne();
+
+        assertCompletedOnce(caseId, documentId, requestId);
+    }
+
+    @Test
+    @DisplayName("a step that throws short of an answer is a try, UNEXPECTED, never a receipt")
+    void unexpectedFaultIsATry() {
+        String caseId = fixture(null);
+        UUID cdamId = UUID.randomUUID();
+        String documentId = document(caseId, "Attached", null, cdamId);
+        UUID requestId = admitted(caseId, documentId, null, cdamId, null);
+        remote.during = () -> {
+            throw new IllegalStateException("a fault short of an answer");
+        };
+
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
+
+        DocumentDeletionStep tried = step(requestId, DocumentDeletionStepKind.CDAM_BINARY);
+        assertThat(tried.state()).isEqualTo(DocumentDeletionStepState.Pending);
+        assertThat(tried.attempts()).isOne();
+        assertThat(tried.outcome()).isEqualTo("UNEXPECTED");
+        assertThat(requests.findById(requestId).orElseThrow().owner()).isNull();
+        assertThat(deletedEvents(caseId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("completion with the document row already gone is refused, never Completed, then needs attention")
+    void documentRowGoneNeverCompletes() {
+        String caseId = fixture(null);
+        String documentId = document(caseId, "Local", null, null);
+        UUID requestId = admitted(caseId, documentId, null, null, null);
+        jdbc.update("DELETE FROM deedpoll_supportingdocument WHERE id = ?", documentId);
+
+        work.carryOut(requestId, work.deadline());
+        for (int i = 1; i < MAX_ATTEMPTS; i++) {
+            clock.set(clock.get().plusHours(2));
+            assertThat(recovery.run()).isOne();
+        }
+
+        DocumentDeletionRequest request = requests.findById(requestId).orElseThrow();
+        assertThat(request.status()).isEqualTo(DocumentDeletionStatus.NeedsAttention);
+        assertThat(request.failure()).isEqualTo(DocumentDeletionFailure.LOCAL_COMPLETION_REFUSED.name());
+        assertThat(deletedEvents(caseId)).isEmpty();
         assertThat(count("SELECT count(*) FROM deedpoll_notes WHERE \"deedPollId\" = ?", caseId)).isZero();
     }
 
@@ -639,6 +712,11 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
     }
 
     /** Remote answers scripted per step kind, with a log of the calls made and a hook run during each. */
+    /** Carries the request out and answers the status it has afterwards. */
+    private Optional<DocumentDeletionStatus> carriedOut(UUID requestId, LocalDateTime deadline) {
+        return work.carryOut(requestId, deadline).map(DocumentDeletionRequest::status);
+    }
+
     static final class ScriptedRemote implements DocumentDeletionRemote {
         final Deque<StepOutcome> ccd = new ArrayDeque<>();
         final Deque<StepOutcome> cdam = new ArrayDeque<>();

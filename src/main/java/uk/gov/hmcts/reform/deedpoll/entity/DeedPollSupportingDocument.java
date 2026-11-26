@@ -15,8 +15,10 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.Generated;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.SQLRestriction;
+import org.hibernate.generator.EventType;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
@@ -97,7 +99,10 @@ public class DeedPollSupportingDocument {
     private short storageUploadAttempts;
 
     // The reviewed version (V51): its own BEFORE UPDATE trigger increments it when a reviewed column changes, so it
-    // is never written from here. Read it again after a write when a response needs it.
+    // is never written from here. Hibernate reads it back after every insert and update, so a response built from
+    // the entity after a write (an upload's attach move) publishes the version a deletion must send, not the one
+    // before it.
+    @Generated(event = {EventType.INSERT, EventType.UPDATE})
     @Column(name = "version", nullable = false, insertable = false, updatable = false)
     private long version = 1;
 

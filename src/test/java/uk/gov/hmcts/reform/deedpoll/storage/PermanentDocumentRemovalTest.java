@@ -43,7 +43,7 @@ class PermanentDocumentRemovalTest {
     private final PermanentDocumentRemoval removal = new PermanentDocumentRemoval(event, documents, cdam, files);
 
     @Test
-    @DisplayName("CCD: submitted is the receipt; out of time sends nothing; a start failure, a refusal and an unknown")
+    @DisplayName("CCD: a receipt; out of time sends nothing; a start failure, a refusal, a transient, an unknown")
     void ccdOutcomes() {
         when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class))).thenReturn(true, false);
         assertThat(ccd()).isEqualTo(StepOutcome.done("SUBMITTED"));
@@ -56,6 +56,17 @@ class PermanentDocumentRemovalTest {
         when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
             .thenThrow(CdamDocumentStoreTest.answered(422));
         assertThat(ccd()).isEqualTo(StepOutcome.failed("REFUSED", DocumentDeletionFailure.CCD_REFERENCE_FAILED));
+
+        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+            .thenThrow(CdamDocumentStoreTest.answered(403));
+        assertThat(ccd()).isEqualTo(StepOutcome.failed("REFUSED", DocumentDeletionFailure.CCD_REFERENCE_FAILED));
+
+        for (int transientStatus : new int[] {401, 409, 429}) {
+            when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+                .thenThrow(CdamDocumentStoreTest.answered(transientStatus));
+            assertThat(ccd()).as("status %d", transientStatus)
+                .isEqualTo(StepOutcome.retry("TRANSIENT_" + transientStatus));
+        }
 
         when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
             .thenThrow(CdamDocumentStoreTest.answered(502));

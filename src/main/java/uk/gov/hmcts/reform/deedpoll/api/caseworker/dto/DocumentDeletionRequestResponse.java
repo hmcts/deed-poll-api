@@ -5,7 +5,6 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRe
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionStatus;
 
 import java.time.LocalDateTime;
-import java.util.Arrays;
 import java.util.UUID;
 
 /**
@@ -30,14 +29,10 @@ public record DocumentDeletionRequestResponse(UUID requestId, String documentId,
     }
 
     /**
-     * The stored code as a published member. Only {@link DocumentDeletionFailure} names are ever written; a name a
-     * later release removed reads as null under a still-published {@code NeedsAttention}, rather than failing the read.
+     * The stored code as a published member. Only {@link DocumentDeletionFailure} names are ever written
+     * ({@code DocumentDeletionWork}), so an unknown one fails the read rather than publishing a null failure.
      */
     private static DocumentDeletionFailure failure(DocumentDeletionRequest request) {
-        if (request.failure() == null) {
-            return null;
-        }
-        return Arrays.stream(DocumentDeletionFailure.values()).filter(code -> code.name().equals(request.failure()))
-            .findFirst().orElse(null);
+        return request.failure() == null ? null : DocumentDeletionFailure.valueOf(request.failure());
     }
 }

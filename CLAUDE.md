@@ -241,7 +241,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
 - **A new write path must call `AuditTrail`, and a new write route must say what it records.** V36's
   `deedpoll_audit_event` holds who (the IDAM subject and display name), when, the `AuditAction`, the entity, the case
   and the field *names*, plus `detail` restricted to `AuditEntry`'s allowlisted keys; it holds no applicant data and
-  is kept for 7 years. `deedpoll_audit_event_value` holds the before/after values (decision 5's text encoding, a
+  is kept for 7 years. Two keys are staff-written free text, typed and checked: application deletion's `deletionNote`
+  and document deletion's `documentDeletionReason`. They stay with the event for its 7 years and are not disposed
+  with the case, which is why the user guidance tells staff to leave applicant details out. `deedpoll_audit_event_value` holds the before/after values (decision 5's text encoding, a
   row only for a changed field), which are applicant data disposed with the case, so `AuditTrail` refuses values on
   an entity with no case (saved queries, Gazette settings, process settings, the Masters list, bank holidays and batches record names only; process settings keep
   their values in V40's `deedpoll_process_settings_change`). `record` is

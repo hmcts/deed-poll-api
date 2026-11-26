@@ -215,27 +215,32 @@ either holds a case lock (key share or stronger) or inserts a child row, which t
 after admission waits for admission's commit and then has to ask the fence after taking its lock, as V48's fence
 already requires (*Fence points*).
 
-## Fence points (Task 3 implements them)
+## Fence points
 
 Admission inserts the document deletion request, and the request row **is** the fence for that one document. Other
 documents of the same case stay usable.
 
-- **JPA:** extend `DeedPollSupportingDocument`'s `@SQLRestriction` (today `DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID`)
-  with "no document deletion request names this `id`". That one change hides the row from `findDocument`,
+- **JPA:** `DeedPollSupportingDocument`'s `@SQLRestriction` is `DeletionFenceSql.DOCUMENT_RESTRICTION`: the case's
+  fence plus "no document deletion request names this `id`". It hides the row from `findDocument`,
   `readableDocument` (download, preview, judicial, the correspondence reader), `DeedPoll.documents` (case detail),
-  `findCcdDocumentProjections` (the CCD view), `findByDeedPollIdOrderByCreatedOnAsc` (email history and compose),
-  `DeedDocumentService.existingDeed` and the storage moves' `findByIdAndDeedPollIdForUpdate`.
-- **Native statements that read documents:** only `DeletionAdmissionRepository.documents` and
-  `hasUnresolvedDocumentStorage`. They keep seeing a fenced document; application admission never inventories one,
-  because it refuses first while the document's request is unresolved (*Application deletion*, below). Recovery and finalisation read their own request table natively, so they never need the
-  entity.
-- **Ask after the lock:** writers that take the case lock and then ask (`DeletionFence.admits`, `lockUnfenced…`) also
-  ask whether the document they are about to use is fenced: `CaseEmailService` before enqueuing a deed id,
-  `DeedPreparations.requireCurrent`/`verifyAndRelease`, `OwnedStaging.promote`, `SupportingDocumentsHandler` before
-  `attachedOnTheCase`.
-- **Backstop at commit:** a V49-style `DEFERRABLE INITIALLY DEFERRED` constraint trigger refusing an INSERT/UPDATE of a
-  `deedpoll_supportingdocument` row named by a document deletion request (DELETE allowed), and an INSERT of a
-  `deedpoll_notification` whose document key names one. A writer that forgot to ask then fails at commit.
+  `findCcdDocumentProjections` (the CCD view), `findByDeedPollIdOrderByCreatedOnAsc` (email history and compose) and
+  `DeedDocumentService.existingDeed`.
+- **Native statements that read documents:** application deletion's `DeletionAdmissionRepository.documents` and
+  `hasUnresolvedDocumentStorage`, which keep seeing a fenced document (application admission refuses first while its
+  request is unresolved, `hasUnresolvedDocumentDeletion`, *Application deletion*, below);
+  `DocumentDeletionAdmissionRepository`'s `lockDocument` and its in-use queries (`sharesBinary`,
+  `hasPendingEmailNaming`, `hasRetainedDeedPreparation`, `hasPromotingStage`); and completion's
+  `DocumentDeletionRequestRepository.lockDocumentRecord`. `DeletionFinalisationRepository.hasUnresolvedDocumentDeletion`
+  reads the request table only.
+- **Ask after the lock:** every writer that locks a document does it with
+  `DeedPollSupportingDocumentRepository.findUnfencedByIdAndDeedPollIdForUpdate`, which repeats the fence after the
+  row lock: the storage moves (`DocumentStorageStates`, `attachedOnTheCase` included), `DocumentService`'s update and
+  removal, `DeedPreparations.requireCurrent`/`verifyAndRelease` and `OwnedStaging.promote`. An email names only
+  documents its JPA reads can see, and V51's notification trigger refuses one that names a fenced document.
+- **Backstop at commit:** V51's `DEFERRABLE INITIALLY DEFERRED` constraint triggers refuse an INSERT/UPDATE of a
+  `deedpoll_supportingdocument` row a document deletion request names (DELETE allowed), and an INSERT of a
+  `deedpoll_notification` whose personalisation names one on the same case. A writer that forgot to ask then fails
+  at commit.
 
 ## Request budget and per-call timeouts
 
@@ -290,6 +295,7 @@ content version's blob, and audits `HARD_DELETED`.
 | `401` | S2S rejected | retry (bounded), then `NeedsAttention` |
 | `403` | CDAM's service permission (`deed_poll_api` lacks `UPDATE` on the document's case type) | `NeedsAttention` `CDAM_PERMISSION`; an activation blocker, not a retry |
 | `400` | bad id (cannot happen for a stored UUID) | `NeedsAttention` |
+| any other `2xx` (`200`, `202`) | not dm-store's answer; not a receipt (`CdamPermanentDelete.receiptOnly`) | as unknown, below |
 | `5xx`, `504`, read timeout, connection reset | unknown: the delete may or may not have landed | `InProgress`; the same permanent delete is re-sent (safe: `204` if it had not landed, `404` → `NeedsAttention` if it had), bounded attempts, then `NeedsAttention` |
 
 **What `204` does not prove.** `BlobStorageDeleteService.deleteDocumentContentVersion` logs and swallows a blob-store
@@ -339,7 +345,7 @@ Run it with `./gradlew test --tests "uk.gov.hmcts.reform.deedpoll.storage.CdamPe
   Existing rows start at 1, and the entity maps the column read-only.
 - **The fence.** The entity restriction is `DeletionFenceSql.DOCUMENT_RESTRICTION`. A deferred
   `deedpoll_document_deletion_fence` trigger refuses an INSERT or UPDATE of a named document, and an email insert
-  whose personalisation names one on the same case. Recovery reads the row natively through `fencedDocument`.
+  whose personalisation names one on the same case. Completion reads and locks the row natively through `lockDocumentRecord`.
 
 ## Admission (Task 3)
 
@@ -390,7 +396,10 @@ request as it then stands.
 - **Steps, in order, outside any transaction** (`DocumentDeletionRemote`, implemented by `storage/PermanentDocumentRemoval`):
   - `CCD_REFERENCE`: `CaseDocumentsEvent.submit` with the case's other `Attached` rows read through the entity
     restriction just before the call, so any fenced document is absent and two removals cannot put each other
-    back. The budget is asked again between start and submit.
+    back. The budget is asked again between start and submit. Failures: data-store's 400, 403, 422 and other
+    refusals need attention at once (`CCD_REFERENCE_FAILED`); its 401, 409 (another event on the same case, as two
+    staff deleting two of its documents at once cause) and 429, a start that sent nothing, a 5xx and no answer are
+    retried, each try starting a fresh event.
   - `CDAM_BINARY`: `storage/CdamPermanentDelete`, the only sender of `permanent=true`. It uses CDAM's own
     `CaseDocumentClientApi`, built with Feign directly: `SpringMvcContract`, `NoConnectionRetry`'s OkHttp,
     `Retryer.NEVER_RETRY`, connect 2 s and read 8 s. Answers are classified as in the table above.
@@ -416,7 +425,9 @@ request as it then stands.
     requester, which audits `NOTE_CREATED`;
   - writes the receipt (`complete`: `Completed`, reason, name and locators cleared).
   No V50 tombstone is written: nothing is left to inventory, and the request is the evidence. Any failure rolls all
-  of it back and is retried. After `max-attempts` passes the request needs attention, `LOCAL_COMPLETION_REFUSED`.
+  of it back and is retried. After `max-attempts` failed completions, counted in V52's `completion_attempts` apart
+  from the request's claims (which remote retries, budget passes and replays also spend), the request needs
+  attention, `LOCAL_COMPLETION_REFUSED`.
 - **Recovery sweep.** `DocumentDeletionRecovery`, on `DocumentDeletionRecoveryTimer` every `recovery.interval` (1 min),
   claims at most `recovery.batch-size` (10) requests per run, each within a fresh budget. It is on by default
   (`DOCUMENT_DELETION_RECOVERY_ENABLED`) and independent of `APPLICATION_DELETION_WORKER_ENABLED`. Off, a request
@@ -438,7 +449,7 @@ request as it then stands.
   - local completion: a failed note recovered, a failed `DOCUMENT_DELETED` exhausted;
   - two concurrent removals not reattaching each other.
 
-  Alongside it: `CdamPermanentDeleteTest` (WireMock: 204, 404, 403, 401, 400, 408/429/5xx, read timeout, reset, no
+  Alongside it: `CdamPermanentDeleteTest` (WireMock: 204, 200/202 not a receipt, 404, 403, 401, 400, 408/429/5xx, read timeout, reset, no
   tokens, unreachable), `PermanentDocumentRemovalTest`, `DocumentDeletionPropertiesTest`,
   `DocumentDeletionRecoveryTimerTest`, and the chart conformance tests.
 
@@ -543,7 +554,7 @@ deletion of the case is refused (`DOCUMENT_DELETION_UNRESOLVED`) until it is set
 | `CDAM_PURGE_UNPROVEN` | CDAM answered 404. Ask the dm-store team whether the document id (the `CDAM_BINARY` step's locator, passed to them on a restricted channel) is `hardDeleted`; it may be our own lost 204, or a soft delete by somebody else whose blob remains | treat the 404 as a purge; send a soft delete |
 | `CDAM_PERMISSION` | the deployed CDAM's `service_config.json` grants `deed_poll_api` `UPDATE` on `DEEDPOLL` (*Activation blockers*) | retry before the grant is deployed |
 | `CDAM_DELETE_FAILED` | CDAM's 400/401 or repeated unknown answers: S2S secret, CDAM health, the id | resend outside the service |
-| `CCD_REFERENCE_FAILED` | data-store's refusal of `updateSupportingDocuments`: case state (`Registered` only), the system user's role | edit the CCD case by hand |
+| `CCD_REFERENCE_FAILED` | data-store's refusal of `updateSupportingDocuments` (or tries exhausted on 401/409/429/5xx): case state (`Registered` only), the system user's role, data-store health | edit the CCD case by hand |
 | `LOCAL_FILE_UNREMOVED` | `DOCUMENT_STORE_ROOT` mounted, the key valid, file permissions | delete the file by hand and call it done |
 | `LOCAL_COMPLETION_REFUSED` | the database refused completion (an audit, note or trigger failure); the remote steps are already `Done` | delete the row by hand: the audit and note would be lost |
 

@@ -1,5 +1,17 @@
 # Resume state — where the next session picks up
 
+**Plan 20261125-permanent-document-deletion, 2026-11-26:** on `plan/permanent-document-deletion`. V51 adds document
+deletion requests and their remote steps, the document's trigger-maintained `version` and the per-document fence;
+V52 counts local completion's failures apart from the request's claims. Any staff role may call
+`POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests` and
+`GET /caseworker/cases/{id}/document-deletions/{requestId}`; there is no judicial route. Deletion runs in the request,
+and the recovery sweep (on by default, `DOCUMENT_DELETION_RECOVERY_ENABLED`) finishes what it could not.
+`CdamPermanentDelete` is the only `permanent=true` sender, and only its `204` is a receipt. Application admission now
+refuses `DOCUMENT_DELETION_UNRESOLVED`. Next: review and merge; confirm the deployed CDAM grants `deed_poll_api`
+`UPDATE` on `DEEDPOLL`; run the AAT filesystem rehearsal and the prod CDAM smoke (`DOCUMENT-DELETION-SMOKE.md`);
+then Admin's plan. Open: no reviewed route settles a `NeedsAttention` document request yet, and Steve's two open
+questions in the plan. See [DOCUMENT-DELETION.md](DOCUMENT-DELETION.md).
+
 **Plan 20261119-deletion-grace-period-and-restore, 2026-11-19:** same branch. A confirmed deletion stays fenced until
 `restorable_until` (admission plus the `deletionGraceDays` process setting, 1–90, default 14, frozen at admission); the
 worker claims nothing before it, and a Delivery Manager may restore with

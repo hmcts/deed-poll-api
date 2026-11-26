@@ -20,10 +20,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionSt
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionStepKind;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionStepState;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
-import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository;
-import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository.FencedDocument;
+import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository.DocumentRecord;
 import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository.NewDocumentDeletionRequest;
 
 import java.io.IOException;
@@ -336,7 +335,7 @@ class DocumentDeletionMigrationTest extends AbstractPostgresContainerTest {
 
         assertThat(jdbc.update("DELETE FROM deedpoll_supportingdocument WHERE id = ?", documentId)).isOne();
         assertThat(requests.findByDocument(documentId)).isPresent();
-        assertThat(requests.fencedDocument(caseId, documentId)).isEmpty();
+        assertThat(requests.lockDocumentRecord(caseId, documentId)).isEmpty();
 
         assertThat(jdbc.update("DELETE FROM deedpoll_deedpoll WHERE id = ?", caseId)).isOne();
         assertThat(requests.findByDocument(documentId)).isEmpty();
@@ -374,8 +373,9 @@ class DocumentDeletionMigrationTest extends AbstractPostgresContainerTest {
         assertThat(entity.getVersion()).isEqualTo(expected);
         // A JPA write that changes a reviewed column moves it; Hibernate never writes the column itself.
         entity.setName("Renamed");
-        documents.saveAndFlush(entity);
+        DeedPollSupportingDocument written = documents.saveAndFlush(entity);
         assertThat(version(documentId)).isEqualTo(expected + 1);
+        assertThat(written.getVersion()).as("read back after the write").isEqualTo(expected + 1);
     }
 
     @Test
@@ -437,12 +437,10 @@ class DocumentDeletionMigrationTest extends AbstractPostgresContainerTest {
 
         assertThat(requests.fences(fenced)).isTrue();
         assertThat(requests.fences(neighbour)).isFalse();
-        FencedDocument recovery = requests.fencedDocument(caseId, fenced).orElseThrow();
-        assertThat(recovery.storageState()).isEqualTo(DocumentStorageState.Local);
-        assertThat(recovery.storageKey()).isEqualTo("files/" + fenced);
-        assertThat(recovery.version()).isOne();
+        DocumentRecord recovery = requests.lockDocumentRecord(caseId, fenced).orElseThrow();
+        assertThat(recovery.id()).isEqualTo(fenced);
         assertThat(recovery.toString()).doesNotContain("files/", "Evidence");
-        assertThat(requests.fencedDocument(newCase(), fenced)).as("case-scoped").isEmpty();
+        assertThat(requests.lockDocumentRecord(newCase(), fenced)).as("case-scoped").isEmpty();
     }
 
     @Test
@@ -474,7 +472,7 @@ class DocumentDeletionMigrationTest extends AbstractPostgresContainerTest {
 
         transaction().executeWithoutResult(status -> jdbc.update(
             "DELETE FROM deedpoll_supportingdocument WHERE id = ?", fenced));
-        assertThat(requests.fencedDocument(caseId, fenced)).isEmpty();
+        assertThat(requests.lockDocumentRecord(caseId, fenced)).isEmpty();
     }
 
     @Test

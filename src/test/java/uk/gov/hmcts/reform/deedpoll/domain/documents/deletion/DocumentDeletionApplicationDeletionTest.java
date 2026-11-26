@@ -30,9 +30,11 @@ import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository
 import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository.NewDocumentDeletionRequest;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -145,7 +147,7 @@ class DocumentDeletionApplicationDeletionTest extends AbstractPostgresContainerT
         remote.ccd.add(StepOutcome.done("SUBMITTED"));
         remote.cdam.add(StepOutcome.failed("NOT_FOUND", DocumentDeletionFailure.CDAM_PURGE_UNPROVEN));
 
-        assertThat(work.carryOut(admitted.id(), work.deadline())).contains(DocumentDeletionStatus.NeedsAttention);
+        assertThat(carriedOut(admitted.id(), work.deadline())).contains(DocumentDeletionStatus.NeedsAttention);
 
         refusesTheApplication(caseId, DeletionRefusal.DOCUMENT_DELETION_UNRESOLVED);
         assertThat(documentRequests.stepsOf(admitted.id()))
@@ -164,7 +166,7 @@ class DocumentDeletionApplicationDeletionTest extends AbstractPostgresContainerT
         remote.ccd.add(StepOutcome.done("SUBMITTED"));
         remote.cdam.add(StepOutcome.retry("SERVER_ERROR"));
 
-        assertThat(work.carryOut(admitted.id(), work.deadline())).contains(DocumentDeletionStatus.InProgress);
+        assertThat(carriedOut(admitted.id(), work.deadline())).contains(DocumentDeletionStatus.InProgress);
 
         refusesTheApplication(caseId, DeletionRefusal.DOCUMENT_DELETION_UNRESOLVED);
     }
@@ -190,7 +192,7 @@ class DocumentDeletionApplicationDeletionTest extends AbstractPostgresContainerT
         DocumentDeletionRequest cdam = cdamAdmitted(caseId, cdamDocument, reference, deletedCdam);
         remote.ccd.add(StepOutcome.done("SUBMITTED"));
         remote.cdam.add(StepOutcome.done("DELETED"));
-        assertThat(work.carryOut(cdam.id(), work.deadline())).contains(DocumentDeletionStatus.Completed);
+        assertThat(carriedOut(cdam.id(), work.deadline())).contains(DocumentDeletionStatus.Completed);
         assertThat(documentDeletions.delete(CASEWORKER, caseId, metadataOnly, documentCommand()).request().status())
             .isEqualTo(DocumentDeletionStatus.Completed);
 
@@ -447,5 +449,10 @@ class DocumentDeletionApplicationDeletionTest extends AbstractPostgresContainerT
     private int count(String sql, Object... arguments) {
         Integer found = jdbc.queryForObject(sql, Integer.class, arguments);
         return found == null ? 0 : found;
+    }
+
+    /** Carries the request out and answers the status it has afterwards. */
+    private Optional<DocumentDeletionStatus> carriedOut(UUID requestId, LocalDateTime deadline) {
+        return work.carryOut(requestId, deadline).map(DocumentDeletionRequest::status);
     }
 }

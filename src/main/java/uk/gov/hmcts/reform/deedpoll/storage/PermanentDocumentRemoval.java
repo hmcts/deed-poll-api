@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.storage;
 
+import feign.FeignException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -14,6 +15,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentReposit
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
@@ -31,6 +33,9 @@ import java.util.function.BooleanSupplier;
  */
 @Component
 public class PermanentDocumentRemoval implements DocumentDeletionRemote {
+
+    /** data-store answers a fresh event may get past: unauthorised, a concurrent event, too many requests. */
+    private static final Set<Integer> TRANSIENT_CCD_STATUSES = Set.of(401, 409, 429);
 
     private final CaseDocumentsEvent event;
     private final DeedPollSupportingDocumentRepository documents;
@@ -62,10 +67,23 @@ public class PermanentDocumentRemoval implements DocumentDeletionRemote {
         } catch (CaseDocumentsEvent.NotSubmitted nothingSent) {
             return StepOutcome.retry("NOT_SUBMITTED");
         } catch (RuntimeException failure) {
-            return CcdLinkingRule.classify(failure) == CcdLinkingRule.SubmitFailure.REFUSED
-                ? StepOutcome.failed("REFUSED", DocumentDeletionFailure.CCD_REFERENCE_FAILED)
-                : StepOutcome.retry("UNKNOWN");
+            return classifyCcdFailure(failure);
         }
+    }
+
+    /**
+     * What data-store's answer to the document event means for this step. Linking's refusals, less three a fresh
+     * event can get past: {@code 401} (the system user's token), {@code 409} (another event on the same case, which
+     * two staff deleting two of its documents at once cause) and {@code 429}. Each try starts a fresh event and reads
+     * the list afresh, so re-sending is safe; the tries still run out visibly at {@code max-attempts}.
+     */
+    static StepOutcome classifyCcdFailure(RuntimeException failure) {
+        if (failure instanceof FeignException answered && TRANSIENT_CCD_STATUSES.contains(answered.status())) {
+            return StepOutcome.retry("TRANSIENT_" + answered.status());
+        }
+        return CcdLinkingRule.classify(failure) == CcdLinkingRule.SubmitFailure.REFUSED
+            ? StepOutcome.failed("REFUSED", DocumentDeletionFailure.CCD_REFERENCE_FAILED)
+            : StepOutcome.retry("UNKNOWN");
     }
 
     @Override

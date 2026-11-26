@@ -36,7 +36,7 @@ public final class DeletionFenceSql {
      * preview, the judicial view, the CCD view, email history and the correspondence reader -- answers as if it were
      * gone; other documents of the case are untouched. Entity-only: Hibernate qualifies the bare {@code id} with the
      * row's alias, and in a native statement it would resolve to the request's own id. Recovery reads the row
-     * natively ({@code DocumentDeletionRequestRepository.fencedDocument}).
+     * natively ({@code DocumentDeletionRequestRepository.lockDocumentRecord}).
      */
     public static final String DOCUMENT_RESTRICTION = UNFENCED_BY_DEED_POLL_ID
         + " AND NOT EXISTS (SELECT 1 FROM deedpoll_document_deletion_request document_fence"

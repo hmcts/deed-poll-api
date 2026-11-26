@@ -5,7 +5,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionService.Admission;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionService.DocumentDeletionCommand;
-import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository;
 
 import java.time.LocalDateTime;
 
@@ -28,32 +27,21 @@ public class DocumentDeletions {
 
     private final DocumentDeletionService admission;
     private final DocumentDeletionWork work;
-    private final DocumentDeletionRequestRepository requests;
 
-    public DocumentDeletions(DocumentDeletionService admission, DocumentDeletionWork work,
-                             DocumentDeletionRequestRepository requests) {
+    public DocumentDeletions(DocumentDeletionService admission, DocumentDeletionWork work) {
         this.admission = admission;
         this.work = work;
-        this.requests = requests;
-    }
-
-    /**
-     * What a deletion answered.
-     *
-     * @param request  the request as it stands after this call's work
-     * @param admitted whether this call wrote the request; false for a replay
-     */
-    public record Outcome(DocumentDeletionRequest request, boolean admitted) {
     }
 
     /**
      * Admits the deletion (or finds the request this key or body already has) and carries it as far as the budget
      * allows.
      *
+     * @return the request as it stands after this call's work, and whether this call wrote it (false for a replay)
      * @throws IllegalStateException if a transaction is active
      * @see DocumentDeletionService#request for every refusal, each of which writes nothing
      */
-    public Outcome delete(CurrentUser caller, String caseId, String documentId, DocumentDeletionCommand command) {
+    public Admission delete(CurrentUser caller, String caseId, String documentId, DocumentDeletionCommand command) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("A document deletion must not be called inside a transaction");
         }
@@ -61,9 +49,8 @@ public class DocumentDeletions {
         Admission admitted = admission.request(caller, caseId, documentId, command);
         DocumentDeletionRequest request = admitted.request();
         if (request.status() == DocumentDeletionStatus.InProgress) {
-            work.carryOut(request.id(), deadline);
-            request = requests.findByCaseAndId(request.caseId(), request.id()).orElse(request);
+            request = work.carryOut(request.id(), deadline).orElse(request);
         }
-        return new Outcome(request, admitted.admitted());
+        return new Admission(request, admitted.admitted());
     }
 }

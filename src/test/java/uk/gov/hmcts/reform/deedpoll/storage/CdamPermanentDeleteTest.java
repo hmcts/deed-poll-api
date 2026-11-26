@@ -69,6 +69,17 @@ class CdamPermanentDeleteTest {
             serviceTokens);
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {200, 202})
+    @DisplayName("A 2xx other than 204 is not a receipt: unknown, retried, and sent once")
+    void otherSuccessIsNotAReceipt(int status) {
+        CDAM.stubFor(delete(urlPathEqualTo(PATH)).willReturn(aResponse().withStatus(status)));
+
+        assertThat(cdam.delete(DOCUMENT)).isEqualTo(StepOutcome.retry("NOT_A_RECEIPT"));
+
+        CDAM.verify(1, deleteRequestedFor(urlPathEqualTo(PATH)));
+    }
+
     @Test
     @DisplayName("204 to DELETE ?permanent=true, as the system user with S2S, is the receipt")
     void deleted() {

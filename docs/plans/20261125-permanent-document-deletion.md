@@ -337,7 +337,7 @@ generated deed (the V26 reservation survives it) and on a `Failed` row's unattac
 Task 2 (2026-11-26): V51 (`V51__document_deletion_requests.sql`) adds the version column and trigger, the request
 and step tables, the immutability trigger, and the fence (entity restriction, deferred document/email triggers,
 V49's function on a new request). `domain/documents/deletion` holds the reason, fingerprint, statuses, failures and
-steps; `repository/DocumentDeletionRequestRepository` holds the native reads, including recovery's `fencedDocument`.
+steps; `repository/DocumentDeletionRequestRepository` holds the native reads, including completion's `lockDocumentRecord`.
 `AuditEntry` gains typed `documentDeletionReason`/`documentDeletionRequestId` detail, and `AuditAction` gains
 `DOCUMENT_DELETION_REQUESTED`. Receipt retention: the reason and name are cleared at completion, and the request
 cascades with its case. Tests: `DocumentDeletionMigrationTest` (12, Postgres), `DocumentDeletionReasonTest` (32),

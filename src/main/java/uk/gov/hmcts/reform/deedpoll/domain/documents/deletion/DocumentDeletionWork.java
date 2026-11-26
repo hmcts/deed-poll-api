@@ -40,7 +40,8 @@ import java.util.function.Supplier;
  * {@code max-attempts} it is {@code Failed} and the request {@code NeedsAttention}. A refusal another try will not fix
  * is the same at once. Completion runs only once every step is {@code Done}, in one transaction under the case lock,
  * then the document's, then the request's. If it fails it is rolled back whole and retried, and after
- * {@code max-attempts} passes the request needs attention, {@link DocumentDeletionFailure#LOCAL_COMPLETION_REFUSED}.
+ * {@code max-attempts} failed completions (counted apart from the request's claims) the request needs attention,
+ * {@link DocumentDeletionFailure#LOCAL_COMPLETION_REFUSED}.
  * Nothing here ever reports {@code Completed} that {@link DocumentDeletionCompletion} did not write.
  */
 @Slf4j
@@ -91,10 +92,10 @@ public class DocumentDeletionWork {
      * Claims the request, if it is {@code InProgress} and unclaimed (or its claim lapsed), and carries it out until
      * the deadline. A request somebody else holds is left to them.
      *
-     * @return the status the request has afterwards, as read; empty if it is gone
+     * @return the request as it stands afterwards, read again; empty if it is gone
      * @throws IllegalStateException if called inside a transaction, where its commits would be the caller's
      */
-    public Optional<DocumentDeletionStatus> carryOut(UUID requestId, LocalDateTime deadline) {
+    public Optional<DocumentDeletionRequest> carryOut(UUID requestId, LocalDateTime deadline) {
         requireNoTransaction();
         UUID owner = UUID.randomUUID();
         LocalDateTime now = clock.get();
@@ -103,7 +104,7 @@ public class DocumentDeletionWork {
         if (Boolean.TRUE.equals(claimed)) {
             process(requestId, owner, deadline);
         }
-        return statusOf(requestId);
+        return requests.findById(requestId);
     }
 
     /**
@@ -237,12 +238,13 @@ public class DocumentDeletionWork {
         } catch (RuntimeException failed) {
             log.warn("Document deletion request {} could not be completed locally ({})", requestId,
                      failed.getClass().getName());
-            int passes = requests.findById(requestId).orElseThrow(LeaseLost::new).attempts();
-            if (passes >= properties.recovery().maxAttempts()) {
+            // Its own count (V52), not the request's claims, which remote retries and replays also spend.
+            int failures = owned(requestId, owner, () -> requests.completionFailed(requestId));
+            if (failures >= properties.recovery().maxAttempts()) {
                 needsAttention(requestId, owner, DocumentDeletionFailure.LOCAL_COMPLETION_REFUSED);
             } else {
                 release(requestId, owner, DocumentDeletionStatus.InProgress, null,
-                        now().plus(properties.retryDelay(passes)));
+                        now().plus(properties.retryDelay(failures)));
             }
         }
     }
@@ -267,10 +269,6 @@ public class DocumentDeletionWork {
 
     private boolean covers(LocalDateTime deadline, Duration allowance) {
         return !now().plus(allowance).isAfter(deadline);
-    }
-
-    private Optional<DocumentDeletionStatus> statusOf(UUID requestId) {
-        return requests.findById(requestId).map(DocumentDeletionRequest::status);
     }
 
     private LocalDateTime now() {

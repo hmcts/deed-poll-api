@@ -9,7 +9,6 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionSt
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionStep;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionStepKind;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionStepState;
-import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -64,15 +63,6 @@ public class DocumentDeletionRequestRepository {
         row.getInt("attempts"),
         local(row.getTimestamp("completed_at")));
 
-    private static final RowMapper<FencedDocument> DOCUMENT = (row, index) -> new FencedDocument(
-        row.getString("id"),
-        row.getString("deedPollId"),
-        row.getString("name"),
-        row.getLong("version"),
-        DocumentStorageState.valueOf(row.getString("storageState")),
-        row.getString("storageKey"),
-        row.getObject("cdamDocumentId", UUID.class));
-
     private final JdbcTemplate jdbc;
 
     public DocumentDeletionRequestRepository(JdbcTemplate jdbc) {
@@ -90,20 +80,6 @@ public class DocumentDeletionRequestRepository {
         @Override
         public String toString() {
             return "NewDocumentDeletionRequest[id=" + id + ", caseId=" + caseId + ", documentId=" + documentId + "]";
-        }
-    }
-
-    /**
-     * A document row as the fenced recovery needs it, read natively past the entity restriction. Never the hash
-     * token, and {@link #toString()} prints no locator or name.
-     */
-    public record FencedDocument(String id, String caseId, String name, long version,
-                                 DocumentStorageState storageState, String storageKey, UUID cdamDocumentId) {
-
-        @Override
-        public String toString() {
-            return "FencedDocument[id=" + id + ", caseId=" + caseId + ", version=" + version
-                + ", storageState=" + storageState + "]";
         }
     }
 
@@ -153,27 +129,11 @@ public class DocumentDeletionRequestRepository {
                           REQUEST, documentId).stream().findFirst();
     }
 
-    /**
-     * The request, locked {@code FOR UPDATE} until the caller's transaction ends, after the case and document.
-     */
-    public Optional<DocumentDeletionRequest> lockById(UUID id) {
-        return jdbc.query("select " + COLUMNS + " from deedpoll_document_deletion_request where id = ? for update",
-                          REQUEST, id).stream().findFirst();
-    }
-
     /** Whether any request names this document: the fence, as the entity restriction and V51's trigger state it. */
     public boolean fences(String documentId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "select exists (select 1 from deedpoll_document_deletion_request where document_id = ?)",
             Boolean.class, documentId));
-    }
-
-    /** The document's row, read past the entity restriction, while it still exists. */
-    public Optional<FencedDocument> fencedDocument(String caseId, String documentId) {
-        return jdbc.query("""
-            select id, "deedPollId", name, "version", "storageState", "storageKey", "cdamDocumentId"
-              from deedpoll_supportingdocument where id = ? and "deedPollId" = ?
-            """, DOCUMENT, documentId, caseId).stream().findFirst();
     }
 
     /**
@@ -267,6 +227,18 @@ public class DocumentDeletionRequestRepository {
             returning request.id
             """, (row, index) -> row.getObject("id", UUID.class), timestamp(now), timestamp(now), owner,
             timestamp(leaseUntil)).stream().findFirst();
+    }
+
+    /**
+     * Counts a failed local completion (V52), apart from the request's claims, joining the caller's transaction.
+     *
+     * @return the number of failed completions, this one included
+     */
+    public int completionFailed(UUID id) {
+        return jdbc.queryForObject("""
+            update deedpoll_document_deletion_request set completion_attempts = completion_attempts + 1
+             where id = ? returning completion_attempts
+            """, Integer.class, id);
     }
 
     /**
