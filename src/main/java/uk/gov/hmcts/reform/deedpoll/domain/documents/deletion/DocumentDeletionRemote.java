@@ -1,8 +1,9 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents.deletion;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
  * The remote half of a permanent document deletion: one call per step, outside any transaction, each answering a
@@ -18,16 +19,21 @@ public interface DocumentDeletionRemote {
      * Takes the document off the linked CCD case's current collection: the document event again, with the case's
      * other {@code Attached} documents read fresh just before it is sent, never a list read earlier.
      *
-     * @param mayStillSubmit asked between the event's start and its submission; false sends nothing more and answers
-     *                       {@link Verdict#NOT_SENT}
+     * @param timeLeft how long is left before a call must have started: it bounds the wait for each token grant, and
+     *                 is asked again before the event's start and between the start and its submission; negative
+     *                 sends nothing more and answers {@link Verdict#NOT_SENT}
      */
     StepOutcome removeCcdReference(String caseId, String documentId, String caseReference,
-                                   BooleanSupplier mayStillSubmit);
+                                   Supplier<Duration> timeLeft);
 
     /**
      * CDAM's {@code DELETE ?permanent=true}, never preceded by a soft delete. Only {@code 204} is a receipt.
+     *
+     * @param timeLeft how long is left before the delete must have been sent: it bounds the wait for each token grant,
+     *                 and is asked again once both are in hand; negative sends nothing and answers
+     *                 {@link Verdict#NOT_SENT}
      */
-    StepOutcome deleteCdamPermanently(UUID cdamDocumentId);
+    StepOutcome deleteCdamPermanently(UUID cdamDocumentId, Supplier<Duration> timeLeft);
 
     /** The filesystem store's removal, verified: deleted, or the root present and the file not. */
     StepOutcome removeLocalFile(String storageKey);

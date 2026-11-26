@@ -50,7 +50,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -427,6 +427,123 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a receipt recorded by the lapsed worker outlives the new owner's 404: the request still completes")
+    void earlierReceiptSurvivesALaterNotFound() {
+        String caseId = fixture(null);
+        UUID cdamId = UUID.randomUUID();
+        String documentId = document(caseId, "Attached", null, cdamId);
+        UUID requestId = admitted(caseId, documentId, null, cdamId, null);
+        UUID sweep = UUID.randomUUID();
+        clock.set(clock.get().plusMinutes(3));
+        assertThat(requests.claim(requestId, sweep, clock.get(), clock.get().plusMinutes(2))).isTrue();
+        // The lapsed worker's 204 lands while the new owner's own delete is in flight.
+        remote.during = () -> assertThat(requests.stepDone(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).id(),
+                                                           "DELETED", clock.get())).isTrue();
+        remote.cdam.add(StepOutcome.failed("NOT_FOUND", DocumentDeletionFailure.CDAM_PURGE_UNPROVEN));
+
+        work.process(requestId, sweep, work.deadline());
+
+        assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).outcome()).isEqualTo("DELETED");
+        assertCompletedOnce(caseId, documentId, requestId);
+    }
+
+    @Test
+    @DisplayName("the lapsed worker's 204 after the new owner's 404 replaced the step's failure: the request leaves "
+                 + "NeedsAttention and completes once")
+    void laterReceiptReplacesAnEarlierNotFound() {
+        String caseId = fixture(null);
+        UUID cdamId = UUID.randomUUID();
+        String documentId = document(caseId, "Attached", null, cdamId);
+        UUID requestId = admitted(caseId, documentId, null, cdamId, null);
+        UUID sweep = UUID.randomUUID();
+        // The new owner's re-send is answered first (404), and the original worker's own delete (204) only after.
+        remote.cdam.add(StepOutcome.failed("NOT_FOUND", DocumentDeletionFailure.CDAM_PURGE_UNPROVEN));
+        remote.cdam.add(StepOutcome.done("DELETED"));
+        remote.during = () -> {
+            remote.during = () -> { };
+            clock.set(clock.get().plusMinutes(3));
+            assertThat(requests.claim(requestId, sweep, clock.get(), clock.get().plusMinutes(2))).isTrue();
+            work.process(requestId, sweep, work.deadline());
+            DocumentDeletionRequest failed = requests.findById(requestId).orElseThrow();
+            assertThat(failed.status()).isEqualTo(DocumentDeletionStatus.NeedsAttention);
+            assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).state())
+                .isEqualTo(DocumentDeletionStepState.Failed);
+        };
+
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
+        DocumentDeletionStep cdamStep = step(requestId, DocumentDeletionStepKind.CDAM_BINARY);
+        assertThat(cdamStep.state()).isEqualTo(DocumentDeletionStepState.Done);
+        assertThat(cdamStep.outcome()).isEqualTo("DELETED");
+        DocumentDeletionRequest reopened = requests.findById(requestId).orElseThrow();
+        assertThat(reopened.failure()).isNull();
+        assertThat(reopened.owner()).isNull();
+        assertThat(deletedEvents(caseId)).as("the lapsed worker completes nothing").isEmpty();
+
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.Completed);
+        assertThat(remote.calls).hasSize(2);
+        assertCompletedOnce(caseId, documentId, requestId);
+    }
+
+    @Test
+    @DisplayName("a receipt after a failure leaves the request NeedsAttention while another step is still Failed")
+    void laterReceiptKeepsAnotherFailure() {
+        String reference = reference();
+        String caseId = fixture(reference);
+        UUID cdamId = UUID.randomUUID();
+        String documentId = document(caseId, "Attached", null, cdamId);
+        UUID requestId = admitted(caseId, documentId, reference, cdamId, null);
+        remote.ccd.add(StepOutcome.failed("REFUSED", DocumentDeletionFailure.CCD_REFERENCE_FAILED));
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.NeedsAttention);
+        UUID cdamStep = step(requestId, DocumentDeletionStepKind.CDAM_BINARY).id();
+        assertThat(requests.stepFailed(cdamStep, "NOT_FOUND", true)).isOne();
+
+        assertThat(requests.stepDone(cdamStep, "DELETED", clock.get())).isTrue();
+
+        assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).state())
+            .isEqualTo(DocumentDeletionStepState.Done);
+        assertThat(step(requestId, DocumentDeletionStepKind.CCD_REFERENCE).state())
+            .isEqualTo(DocumentDeletionStepState.Failed);
+        DocumentDeletionRequest still = requests.findById(requestId).orElseThrow();
+        assertThat(still.status()).isEqualTo(DocumentDeletionStatus.NeedsAttention);
+        assertThat(still.failure()).isEqualTo(DocumentDeletionFailure.CCD_REFERENCE_FAILED.name());
+    }
+
+    @Test
+    @DisplayName("a receipt recorded meanwhile outlives the new owner's unknown answer too: no try, and it completes")
+    void earlierReceiptSurvivesALaterRetry() {
+        String caseId = fixture(null);
+        UUID cdamId = UUID.randomUUID();
+        String documentId = document(caseId, "Attached", null, cdamId);
+        UUID requestId = admitted(caseId, documentId, null, cdamId, null);
+        UUID sweep = UUID.randomUUID();
+        clock.set(clock.get().plusMinutes(3));
+        assertThat(requests.claim(requestId, sweep, clock.get(), clock.get().plusMinutes(2))).isTrue();
+        remote.during = () -> assertThat(requests.stepDone(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).id(),
+                                                           "DELETED", clock.get())).isTrue();
+        remote.cdam.add(StepOutcome.retry("UNKNOWN"));
+
+        work.process(requestId, sweep, work.deadline());
+
+        assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).attempts()).isOne();
+        assertCompletedOnce(caseId, documentId, requestId);
+    }
+
+    @Test
+    @DisplayName("a CDAM token grant that spends the budget sends no delete and spends no try")
+    void cdamDeleteOutOfTimeAfterTokens() {
+        String caseId = fixture(null);
+        UUID cdamId = UUID.randomUUID();
+        String documentId = document(caseId, "Attached", null, cdamId);
+        UUID requestId = admitted(caseId, documentId, null, cdamId, null);
+        remote.tokens = () -> clock.set(clock.get().plusSeconds(15));
+
+        assertThat(carriedOut(requestId, work.deadline())).contains(DocumentDeletionStatus.InProgress);
+        assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).state())
+            .isEqualTo(DocumentDeletionStepState.Pending);
+        assertThat(step(requestId, DocumentDeletionStepKind.CDAM_BINARY).attempts()).isZero();
+    }
+
+    @Test
     @DisplayName("two sweeps racing for one due request: exactly one claims it, and it completes once")
     void racingSweeps() throws Exception {
         String caseId = fixture(null);
@@ -584,16 +701,16 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         CaseDocumentsEvent event = mock(CaseDocumentsEvent.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SupportingDocumentReference>> sent = ArgumentCaptor.forClass(List.class);
-        when(event.submit(eq(reference), sent.capture(), any(BooleanSupplier.class))).thenReturn(true);
+        when(event.submit(eq(reference), sent.capture(), any())).thenReturn(true);
         @SuppressWarnings("unchecked")
         PermanentDocumentRemoval removal = new PermanentDocumentRemoval(event, documentRows,
             mock(ObjectProvider.class), (ObjectProvider<LocalFilesystemDocumentStore>) mock(ObjectProvider.class));
 
         // The second removal is admitted after the first one's request but before its event is sent.
         admitted(caseId, secondId, reference, second, null);
-        assertThat(removal.removeCcdReference(caseId, firstId, reference, () -> true))
+        assertThat(removal.removeCcdReference(caseId, firstId, reference, () -> Duration.ofSeconds(10)))
             .isEqualTo(StepOutcome.done("SUBMITTED"));
-        assertThat(removal.removeCcdReference(caseId, secondId, reference, () -> true))
+        assertThat(removal.removeCcdReference(caseId, secondId, reference, () -> Duration.ofSeconds(10)))
             .isEqualTo(StepOutcome.done("SUBMITTED"));
 
         assertThat(sent.getAllValues()).hasSize(2).allSatisfy(documents -> assertThat(documents)
@@ -711,33 +828,39 @@ class DocumentDeletionWorkTest extends AbstractPostgresContainerTest {
         return found == null ? 0 : found;
     }
 
-    /** Remote answers scripted per step kind, with a log of the calls made and a hook run during each. */
     /** Carries the request out and answers the status it has afterwards. */
     private Optional<DocumentDeletionStatus> carriedOut(UUID requestId, LocalDateTime deadline) {
         return work.carryOut(requestId, deadline).map(DocumentDeletionRequest::status);
     }
 
+    /** Remote answers scripted per step kind, with a log of the calls made and a hook run during each. */
     static final class ScriptedRemote implements DocumentDeletionRemote {
         final Deque<StepOutcome> ccd = new ArrayDeque<>();
         final Deque<StepOutcome> cdam = new ArrayDeque<>();
         final Deque<StepOutcome> local = new ArrayDeque<>();
         final List<String> calls = new ArrayList<>();
         Runnable during = () -> { };
+        /** Run before the CDAM delete's budget check: the token grants. */
+        Runnable tokens = () -> { };
 
         @Override
         public StepOutcome removeCcdReference(String caseId, String documentId, String caseReference,
-                                              BooleanSupplier mayStillSubmit) {
+                                              Supplier<Duration> timeLeft) {
             calls.add("CCD:" + caseReference);
             during.run();
-            if (!mayStillSubmit.getAsBoolean()) {
+            if (timeLeft.get().isNegative()) {
                 return StepOutcome.notSent("OUT_OF_TIME");
             }
             return next(ccd);
         }
 
         @Override
-        public StepOutcome deleteCdamPermanently(UUID cdamDocumentId) {
+        public StepOutcome deleteCdamPermanently(UUID cdamDocumentId, Supplier<Duration> timeLeft) {
             calls.add("CDAM:" + cdamDocumentId);
+            tokens.run();
+            if (timeLeft.get().isNegative()) {
+                return StepOutcome.notSent("OUT_OF_TIME");
+            }
             during.run();
             return next(cdam);
         }

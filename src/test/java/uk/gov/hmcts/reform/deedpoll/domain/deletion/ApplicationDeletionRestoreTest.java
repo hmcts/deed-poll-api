@@ -496,9 +496,11 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
      * the case row this test holds, and the retry queues on the same row behind the restore. Called on the
      * transaction's own connection, so {@code pg_backend_pid()} is the lock holder. Counting every lock wait in the
      * database instead let an unrelated waiter count, and matching the lock statement's text missed a waiter whose
-     * {@code query} had not been updated yet.
+     * {@code query} had not been updated yet. Postgres keeps one statistics snapshot for the whole transaction, so
+     * each poll clears it first.
      */
     private int waiters() {
+        jdbc.queryForList("SELECT pg_stat_clear_snapshot()");
         Integer waiting = jdbc.queryForObject("""
             WITH RECURSIVE blocked(pid) AS (
                 SELECT pid FROM pg_stat_activity WHERE pg_backend_pid() = ANY (pg_blocking_pids(pid))

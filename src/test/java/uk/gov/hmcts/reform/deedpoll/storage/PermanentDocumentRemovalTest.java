@@ -12,9 +12,10 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentReposit
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
-import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -45,34 +46,34 @@ class PermanentDocumentRemovalTest {
     @Test
     @DisplayName("CCD: a receipt; out of time sends nothing; a start failure, a refusal, a transient, an unknown")
     void ccdOutcomes() {
-        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class))).thenReturn(true, false);
+        when(event.submit(eq(REFERENCE), anyList(), any())).thenReturn(true, false);
         assertThat(ccd()).isEqualTo(StepOutcome.done("SUBMITTED"));
         assertThat(ccd()).isEqualTo(StepOutcome.notSent("OUT_OF_TIME"));
 
-        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+        when(event.submit(eq(REFERENCE), anyList(), any()))
             .thenThrow(new CaseDocumentsEvent.NotSubmitted("Not submitted"));
         assertThat(ccd()).isEqualTo(StepOutcome.retry("NOT_SUBMITTED"));
 
-        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+        when(event.submit(eq(REFERENCE), anyList(), any()))
             .thenThrow(CdamDocumentStoreTest.answered(422));
         assertThat(ccd()).isEqualTo(StepOutcome.failed("REFUSED", DocumentDeletionFailure.CCD_REFERENCE_FAILED));
 
-        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+        when(event.submit(eq(REFERENCE), anyList(), any()))
             .thenThrow(CdamDocumentStoreTest.answered(403));
         assertThat(ccd()).isEqualTo(StepOutcome.failed("REFUSED", DocumentDeletionFailure.CCD_REFERENCE_FAILED));
 
         for (int transientStatus : new int[] {401, 409, 429}) {
-            when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+            when(event.submit(eq(REFERENCE), anyList(), any()))
                 .thenThrow(CdamDocumentStoreTest.answered(transientStatus));
             assertThat(ccd()).as("status %d", transientStatus)
                 .isEqualTo(StepOutcome.retry("TRANSIENT_" + transientStatus));
         }
 
-        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+        when(event.submit(eq(REFERENCE), anyList(), any()))
             .thenThrow(CdamDocumentStoreTest.answered(502));
         assertThat(ccd()).isEqualTo(StepOutcome.retry("UNKNOWN"));
 
-        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class)))
+        when(event.submit(eq(REFERENCE), anyList(), any()))
             .thenThrow(CdamDocumentStoreTest.noResponse());
         assertThat(ccd()).isEqualTo(StepOutcome.retry("UNKNOWN"));
     }
@@ -82,12 +83,13 @@ class PermanentDocumentRemovalTest {
     void cdamOutcomes() {
         UUID id = UUID.randomUUID();
         when(cdam.getIfAvailable()).thenReturn(null);
-        assertThat(removal.deleteCdamPermanently(id)).isEqualTo(StepOutcome.retry("STORE_UNAVAILABLE"));
+        Supplier<Duration> maySend = () -> Duration.ofSeconds(10);
+        assertThat(removal.deleteCdamPermanently(id, maySend)).isEqualTo(StepOutcome.retry("STORE_UNAVAILABLE"));
 
         CdamPermanentDelete client = mock(CdamPermanentDelete.class);
         when(cdam.getIfAvailable()).thenReturn(client);
-        when(client.delete(id)).thenReturn(StepOutcome.done("DELETED"));
-        assertThat(removal.deleteCdamPermanently(id)).isEqualTo(StepOutcome.done("DELETED"));
+        when(client.delete(id, maySend)).thenReturn(StepOutcome.done("DELETED"));
+        assertThat(removal.deleteCdamPermanently(id, maySend)).isEqualTo(StepOutcome.done("DELETED"));
     }
 
     @Test
@@ -116,15 +118,15 @@ class PermanentDocumentRemovalTest {
     @DisplayName("the CCD event never carries the document being deleted")
     void ccdListExcludesTheDocument() {
         when(documents.findByDeedPollIdAndStorageStateOrderByCreatedOnAsc(any(), any())).thenReturn(List.of());
-        when(event.submit(eq(REFERENCE), anyList(), any(BooleanSupplier.class))).thenReturn(true);
+        when(event.submit(eq(REFERENCE), anyList(), any())).thenReturn(true);
 
         ccd();
 
-        verify(event).submit(eq(REFERENCE), eq(List.of()), any(BooleanSupplier.class));
+        verify(event).submit(eq(REFERENCE), eq(List.of()), any());
         verify(event, never()).submit(eq(REFERENCE), eq(List.of()));
     }
 
     private StepOutcome ccd() {
-        return removal.removeCcdReference("case", "document", REFERENCE, () -> true);
+        return removal.removeCcdReference("case", "document", REFERENCE, () -> Duration.ofSeconds(10));
     }
 }

@@ -377,9 +377,15 @@ class DocumentDeletionApplicationDeletionTest extends AbstractPostgresContainerT
         }
     }
 
+    /**
+     * Polls for lock waiters. {@link #race} calls this inside the transaction holding the case lock, where Postgres
+     * keeps one statistics snapshot for the whole transaction, so each poll clears it first, or a waiter that
+     * queued after the first poll would never be seen.
+     */
     private void awaitLockWaiters(int count) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
         while (System.nanoTime() < deadline) {
+            jdbc.queryForList("SELECT pg_stat_clear_snapshot()");
             Integer waiting = jdbc.queryForObject("""
                 SELECT count(*) FROM pg_stat_activity
                 WHERE wait_event_type = 'Lock' AND datname = current_database()

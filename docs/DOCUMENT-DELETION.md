@@ -104,7 +104,7 @@ so it never reads the bytes again, and it does not block. `Sent` and other `Fail
 | Writer | Locks |
 |---|---|
 | `DocumentService.uploadDocument` → filesystem `storeAndRecord` / `RemoteDocumentUploads.upload` (`DocumentStorageStates.claim`) | insert (an FK key-share on the case) |
-| `DocumentStorageStates` moves (`uploadUncertain`, `uploaded`, `failed`, `attachUncertain`, `attached`) | the document row only, `FOR UPDATE` |
+| `DocumentStorageStates` moves (`claimPrepared`, `uploadUncertain`, `uploaded`, `failed`, `attachUncertain`, `attached`) | case `FOR KEY SHARE` (`DeletionFenceRepository.shareCase`), then the document `FOR UPDATE` |
 | `SupportingDocumentsHandler` → `DocumentStorageStates.attachedOnTheCase` (data-store's callback) | case `FOR KEY SHARE` (`DeletionFence.admits`), then the document `FOR UPDATE` |
 | `DeedPreparations.prepare` (CDAM forms send) | case `FOR NO KEY UPDATE`, inserts the deed row |
 | `DeedDocumentService.storeDeed` (filesystem forms send) | inserts the deed row |
@@ -206,8 +206,9 @@ Every path that takes more than one of these takes them in this order, and never
 
 Application deletion finalisation locks its own request and then the case, then cascades. That cascade reaches
 document requests only after the case lock, and Task 5 makes application admission refuse while a document request
-is unresolved, so no cycle exists. Storage-state moves lock only the document row and never ask for the case
-afterwards. The audit tables have no FK to the case, so the audit insert after a move takes no case lock.
+is unresolved, so no cycle exists. Storage-state moves take the case `FOR KEY SHARE` before the document row: the
+row's update fires V49's fence trigger, which takes that same lock at commit, so a move that locked only the document
+would ask for the case after it, and deadlock with an admission holding the case and waiting for the document. The audit tables have no FK to the case, so the audit insert after a move takes no case lock.
 
 **Why this closes the races without a lease.** A new queued use (an email enqueue, a deed preparation, a promotion)
 either holds a case lock (key share or stronger) or inserts a child row, which takes the FK key share. Admission's
@@ -251,7 +252,7 @@ The whole request must answer well inside the Application Gateway's 30 s.
 | `DOCUMENT_DELETION_REQUEST_BUDGET` (`deedpoll.documents.deletion.request-budget`) | `20s` | measured from the request's start. A remote step starts only if the budget left covers that call's connect plus read timeout; otherwise the request answers 202 `InProgress` and the sweep resumes it |
 | CDAM permanent delete: a dedicated Feign client, contextId `cdam-document-deletion`, with `NoConnectionRetry` | connect `2s`, read `8s` | separate from `case-document-am-client-api`, so upload and download timeouts do not change |
 | CCD start/submit (`CoreCaseDataApi`, existing `default`) | connect `5s`, read `10s` | unchanged. A start that leaves too little for the submit stops before submitting |
-| IDAM system token (`SystemUserTokens`, cached) and S2S (cached generator) | existing defaults | a fresh grant counts against the budget like any other call |
+| IDAM system token (`SystemUserTokens`, cached) and S2S (cached generator) | existing defaults | a fresh grant counts against the budget like any other call. `ccd/TokenGrants` runs each grant on a small pool of its own (4 threads, no queue) and waits for it only while the budget left still covers the step's call, asked again before the second grant and once both are in hand; a grant that outlasts the wait (or a full pool) sends nothing (`NOT_SENT` `OUT_OF_TIME`, not a try) and finishes in the background, filling the caches for the sweep |
 
 Feign's retryer is `NEVER_RETRY`, and `NoConnectionRetry` turns off OkHttp's silent resend, so each call sent is one
 the deletion decided to send (pinned by `CdamPermanentDeleteContractTest`).
@@ -391,8 +392,13 @@ request as it then stands.
   (`claimNext`, `FOR UPDATE SKIP LOCKED`). Each claim counts a pass in `attempts`. A try, a failure and a release
   are written only while `holds` (the request locked `FOR UPDATE`, owner matches, lease unexpired). A worker that
   lost its lease stops.
-- **Receipts are kept whoever holds the claim.** `stepDone` writes from `Pending` regardless of the lease: a 204
-  forgotten would make the next worker re-send, and that second answer (404) proves nothing.
+- **Receipts are kept whoever holds the claim, in either order.** `stepDone` writes from `Pending` regardless of the
+  lease: a 204 forgotten would make the next worker re-send, and that second answer (404) proves nothing. If the new
+  owner's 404 committed first, the late 204 still wins: `stepDone` (the request locked first, as every claimed write
+  locks it) replaces the step's `Failed` with `Done`, and when no other step is `Failed` the request goes back from
+  `NeedsAttention` to `InProgress`, unclaimed and due now, for the sweep to complete. A step's failure and the
+  request's `NeedsAttention` commit together, so the receipt sees both or neither. This is the one way out of
+  `NeedsAttention`, and only a receipt from the far side takes it.
 - **Steps, in order, outside any transaction** (`DocumentDeletionRemote`, implemented by `storage/PermanentDocumentRemoval`):
   - `CCD_REFERENCE`: `CaseDocumentsEvent.submit` with the case's other `Attached` rows read through the entity
     restriction just before the call, so any fenced document is absent and two removals cannot put each other
@@ -546,7 +552,8 @@ due requests every minute, resends only an unconfirmed step, and keeps every rec
 `InProgress` and is never reported `Completed`. Never clear `owner`/`lease_until` by hand; a lease expires on its own
 after `DOCUMENT_DELETION_RECOVERY_LEASE` (2 min).
 
-**`NeedsAttention`, by code.** The request is never claimed again, the document stays fenced, and an application
+**`NeedsAttention`, by code.** The request is never claimed again (unless a lapsed worker's late receipt replaces the
+failed step's 404, *Remote steps and their receipts*), the document stays fenced, and an application
 deletion of the case is refused (`DOCUMENT_DELETION_UNRESOLVED`) until it is settled.
 
 | Code | Investigate | Do not |

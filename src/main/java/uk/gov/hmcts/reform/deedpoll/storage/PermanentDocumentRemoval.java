@@ -13,11 +13,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRe
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
  * The remote steps of a permanent document deletion (plan 20261125-permanent-document-deletion, Task 4): the CCD
@@ -53,7 +54,7 @@ public class PermanentDocumentRemoval implements DocumentDeletionRemote {
 
     @Override
     public StepOutcome removeCcdReference(String caseId, String documentId, String caseReference,
-                                          BooleanSupplier mayStillSubmit) {
+                                          Supplier<Duration> timeLeft) {
         requireNoTransaction();
         List<SupportingDocumentReference> remaining = documents
             .findByDeedPollIdAndStorageStateOrderByCreatedOnAsc(caseId, DocumentStorageState.Attached).stream()
@@ -62,7 +63,7 @@ public class PermanentDocumentRemoval implements DocumentDeletionRemote {
                                                              attached.getOriginalName(), Optional.empty()))
             .toList();
         try {
-            return event.submit(caseReference, remaining, mayStillSubmit)
+            return event.submit(caseReference, remaining, timeLeft)
                 ? StepOutcome.done("SUBMITTED") : StepOutcome.notSent("OUT_OF_TIME");
         } catch (CaseDocumentsEvent.NotSubmitted nothingSent) {
             return StepOutcome.retry("NOT_SUBMITTED");
@@ -87,14 +88,14 @@ public class PermanentDocumentRemoval implements DocumentDeletionRemote {
     }
 
     @Override
-    public StepOutcome deleteCdamPermanently(UUID cdamDocumentId) {
+    public StepOutcome deleteCdamPermanently(UUID cdamDocumentId, Supplier<Duration> timeLeft) {
         requireNoTransaction();
         CdamPermanentDelete client = cdam.getIfAvailable();
         if (client == null) {
             // A deployment switched off CDAM after admission: nothing is sent, and the tries run out visibly.
             return StepOutcome.retry("STORE_UNAVAILABLE");
         }
-        return client.delete(cdamDocumentId);
+        return client.delete(cdamDocumentId, timeLeft);
     }
 
     @Override

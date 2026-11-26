@@ -354,7 +354,7 @@ class DocumentPreviewCftlibTest extends CftlibTest {
 
     @Test
     @Order(6)
-    void aConverterOutageIsTheFixed503OnceAndTheOriginalStillDownloads() throws Exception {
+    void converterOutageIsTheFixed503OnceAndTheOriginalStillDownloads() throws Exception {
         stubConverter(aResponse().withStatus(503).withBody("Tornado is down at " + CONVERTER.baseUrl()));
         Original docx = originals.get("letter.docx");
         HttpResponse<byte[]> unavailable = preview(caseworkerPreview(recordId, docx), CftlibConfig.DOCUMENT_READER);
@@ -422,7 +422,9 @@ class DocumentPreviewCftlibTest extends CftlibTest {
         }
     }
 
-    /** dm-store's {@code user-id} is the IDAM id CDAM read for: the caller's own, never the system user's. */
+    /**
+     * dm-store's {@code user-id} is the IDAM id CDAM read for: the caller's own, never the system user's.
+     */
     private void assertReadAsCaller(Original original, String user) {
         String caller = idam.getUserInfo(idam.getAccessToken(user, "password")).getUid();
         assertThat(caller).isNotEqualTo(idam.getUserInfo(systemUser.accessToken()).getUid());

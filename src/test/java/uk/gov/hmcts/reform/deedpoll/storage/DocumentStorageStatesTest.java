@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +22,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeletionFenceRepository;
 
 import java.nio.charset.StandardCharsets;
 
@@ -32,7 +34,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -52,7 +56,8 @@ class DocumentStorageStatesTest {
     private static final String HASH = "hash-token";
 
     private final DeedPollSupportingDocumentRepository documents = mock(DeedPollSupportingDocumentRepository.class);
-    private final DocumentStorageStates states = new DocumentStorageStates(null, documents, null, null);
+    private final DeletionFenceRepository cases = mock(DeletionFenceRepository.class);
+    private final DocumentStorageStates states = new DocumentStorageStates(null, documents, null, null, cases);
 
     @Test
     @DisplayName("a claim records its row's upload under the caller who made it, in the same transaction as the save")
@@ -76,7 +81,7 @@ class DocumentStorageStatesTest {
             UploadedFile.of("%PDF".getBytes(StandardCharsets.UTF_8), "birth.pdf", "application/pdf"),
             Optional.empty(), Optional.empty());
 
-        new DocumentStorageStates(deedPolls, documents, types, uploadAudit).claim(upload, actor);
+        new DocumentStorageStates(deedPolls, documents, types, uploadAudit, cases).claim(upload, actor);
 
         verify(uploadAudit).uploaded(any(DeedPollSupportingDocument.class), eq(actor));
     }
@@ -92,7 +97,7 @@ class DocumentStorageStatesTest {
             Optional.empty(), Optional.empty());
 
         assertThatThrownBy(() -> new DocumentStorageStates(deedPolls, documents,
-            null, uploadAudit).claim(upload, AuditActor.system())).isInstanceOf(
+            null, uploadAudit, cases).claim(upload, AuditActor.system())).isInstanceOf(
             NotFoundError.class);
 
         verifyNoInteractions(uploadAudit);
@@ -151,11 +156,23 @@ class DocumentStorageStatesTest {
         type.setName("Birth certificate");
         row.setDocumentType(type);
         states.attachedOnTheCase(RECORD, "document-1", CDAM_ID);
+        when(cases.shareCase(RECORD)).thenReturn(true);
 
         DeedPollSupportingDocument answered = states.attached(claim("document-1"));
 
         assertThat(answered).isSameAs(row);
         assertThat(answered.getStorageState()).isEqualTo(Attached);
+        InOrder order = inOrder(cases, documents);
+        order.verify(cases).shareCase(RECORD);
+        order.verify(documents).findUnfencedByIdAndDeedPollIdForUpdate("document-1", RECORD);
+    }
+
+    @Test
+    @DisplayName("a move whose case has gone is the document's 404, and the document is never locked")
+    void moveOnAGoneCase() {
+        assertThatThrownBy(() -> states.attached(claim("document-1"))).isInstanceOf(NotFoundError.class);
+        verify(documents, never())
+            .findUnfencedByIdAndDeedPollIdForUpdate("document-1", RECORD);
     }
 
     @Test

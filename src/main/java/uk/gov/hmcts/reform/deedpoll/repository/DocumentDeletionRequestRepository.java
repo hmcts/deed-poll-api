@@ -254,18 +254,48 @@ public class DocumentDeletionRequestRepository {
     }
 
     /**
-     * A step's receipt: {@code Done} with its outcome, only from {@code Pending}. Written whether or not the writer
-     * still holds the claim, because a receipt is a fact about the far side: recording it stops a later worker
-     * re-sending a delete whose second answer could prove nothing.
+     * A step's receipt: {@code Done} with its outcome, from {@code Pending} or {@code Failed}. Written whether or not
+     * the writer still holds the claim, because a receipt is a fact about the far side: recording it stops a later
+     * worker re-sending a delete whose second answer could prove nothing.
+     *
+     * <p>Order does not decide it. A worker whose lease lapsed mid-call can hear its {@code 204} after the worker that
+     * took the request over has already heard a {@code 404} and failed the step. That {@code 404} proved nothing and
+     * this receipt proves the delete, so it replaces the failure; and if no other step is {@code Failed}, the request
+     * leaves {@code NeedsAttention} for {@code InProgress}, unclaimed and due now, so the sweep carries it on. The
+     * request is locked first, in the order every claimed write takes (request, then step), and a failure and its
+     * {@code NeedsAttention} commit together, so this sees either both or neither.
      *
      * @return whether this call recorded it
      */
     public boolean stepDone(UUID stepId, String outcome, LocalDateTime now) {
-        return jdbc.update("""
+        jdbc.query("""
+            select request.id from deedpoll_document_deletion_request request
+              join deedpoll_document_deletion_step step on step.request_id = request.id
+             where step.id = ? for update of request
+            """, (row, index) -> row.getString("id"), stepId);
+        if (jdbc.update("""
             update deedpoll_document_deletion_step
                set state = 'Done', outcome = ?, attempts = attempts + 1, completed_at = ?
              where id = ? and state = 'Pending'
-            """, outcome, timestamp(now), stepId) == 1;
+            """, outcome, timestamp(now), stepId) == 1) {
+            return true;
+        }
+        if (jdbc.update("""
+            update deedpoll_document_deletion_step
+               set state = 'Done', outcome = ?, attempts = attempts + 1, completed_at = ?
+             where id = ? and state = 'Failed'
+            """, outcome, timestamp(now), stepId) == 0) {
+            return false;
+        }
+        jdbc.update("""
+            update deedpoll_document_deletion_request request
+               set status = 'InProgress', failure = null, next_attempt_at = ?
+             where request.id = (select request_id from deedpoll_document_deletion_step where id = ?)
+               and request.status = 'NeedsAttention'
+               and not exists (select 1 from deedpoll_document_deletion_step other
+                                where other.request_id = request.id and other.state = 'Failed')
+            """, timestamp(now), stepId);
+        return true;
     }
 
     /**

@@ -15,14 +15,17 @@ import org.springframework.stereotype.Component;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.ccd.document.am.feign.CaseDocumentClientApi;
 import uk.gov.hmcts.reform.deedpoll.ccd.SystemUserTokens;
+import uk.gov.hmcts.reform.deedpoll.ccd.TokenGrants;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionFailure;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRemote.StepOutcome;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
  * CDAM's permanent delete, {@code DELETE /cases/documents/{id}?permanent=true}, for permanent document deletion
@@ -129,6 +132,30 @@ public class CdamPermanentDelete {
         } catch (RuntimeException failure) {
             return StepOutcome.retry("TOKEN_UNAVAILABLE");
         }
+        return send(cdamDocumentId, user, service);
+    }
+
+    /**
+     * {@link #delete(UUID)} within a permanent document deletion's budget: each token grant is waited for only while
+     * {@code timeLeft} is not negative ({@link TokenGrants}), because a cold IDAM or S2S grant can spend the staff
+     * request's budget, and a delete sent then could outlast the request.
+     *
+     * @param timeLeft how long is left before the delete must have been sent; negative means it must not
+     * @return {@code NOT_SENT} {@code OUT_OF_TIME} when time ran out, so nothing was sent
+     */
+    public StepOutcome delete(UUID cdamDocumentId, Supplier<Duration> timeLeft) {
+        Optional<TokenGrants.Tokens> tokens;
+        try {
+            tokens = TokenGrants.within(timeLeft, systemUser::accessToken,
+                                        () -> serviceTokens.getObject().generate());
+        } catch (RuntimeException failure) {
+            return StepOutcome.retry("TOKEN_UNAVAILABLE");
+        }
+        return tokens.map(held -> send(cdamDocumentId, held.user(), held.service()))
+            .orElseGet(() -> StepOutcome.notSent("OUT_OF_TIME"));
+    }
+
+    private StepOutcome send(UUID cdamDocumentId, String user, String service) {
         try {
             client.deleteDocument(user, service, cdamDocumentId, true);
             return StepOutcome.done("DELETED");

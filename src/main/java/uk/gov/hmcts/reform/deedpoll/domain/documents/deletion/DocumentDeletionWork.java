@@ -28,10 +28,14 @@ import java.util.function.Supplier;
  * try, a failure or a release is written only while the claim is still this owner's; a worker whose lease lapsed
  * stops, and whoever holds the request now carries on from its steps. The one exception is a step's receipt, which is
  * recorded whoever holds the claim: it is a fact about the far side, and forgetting it would make the next worker
- * re-send a permanent delete whose second answer, a 404, proves nothing. No transaction is open during a remote call.
+ * re-send a permanent delete whose second answer, a 404, proves nothing. It wins in either order: a receipt that
+ * lands after the new owner's 404 failed the step replaces that failure and puts the request back {@code InProgress}
+ * ({@code DocumentDeletionRequestRepository.stepDone}), which is why a step's failure and the request's
+ * {@code NeedsAttention} commit together. No transaction is open during a remote call.
  *
  * <p><strong>The budget.</strong> A remote call starts only when what is left of the deadline covers its allowance
- * (and a CCD submission is asked again after its start), so the staff member's answer comes well inside the
+ * (and a CCD submission is asked again after its start), and the token grants before it are waited for only while it
+ * still does ({@code ccd/TokenGrants}), so the staff member's answer comes well inside the
  * gateway's 30 s. A step not started for want of time leaves the request {@code InProgress}, due at once, for the
  * sweep.
  *
@@ -169,16 +173,22 @@ public class DocumentDeletionWork {
                 return false;
             }
             case FAILED -> {
-                owned(requestId, owner, () -> requests.stepFailed(step.id(), outcome.code(), true));
-                needsAttention(requestId, owner, outcome.failure());
+                if (!failStep(requestId, owner, step, outcome.code(), true, outcome.failure())) {
+                    // No longer Pending: a worker whose lease lapsed recorded its receipt first. That receipt is
+                    // the fact; this answer (a 404 after the delete it confirmed) proves nothing, so go on.
+                    return receiptKept(requestId, step);
+                }
                 return false;
             }
             case RETRY -> {
                 int tries = step.attempts() + 1;
-                owned(requestId, owner, () -> requests.stepTried(step.id(), outcome.code()));
+                if (owned(requestId, owner, () -> requests.stepTried(step.id(), outcome.code())) == 0) {
+                    return receiptKept(requestId, step);
+                }
                 if (tries >= properties.recovery().maxAttempts()) {
-                    owned(requestId, owner, () -> requests.stepFailed(step.id(), outcome.code(), false));
-                    needsAttention(requestId, owner, exhausted(step.kind()));
+                    if (!failStep(requestId, owner, step, outcome.code(), false, exhausted(step.kind()))) {
+                        return receiptKept(requestId, step);
+                    }
                 } else {
                     log.warn("Document deletion request {}: step {} unconfirmed ({}); it will be tried again",
                              requestId, step.kind(), outcome.code());
@@ -191,15 +201,37 @@ public class DocumentDeletionWork {
         }
     }
 
+    /**
+     * A failure or a try that matched no {@code Pending} step. Only {@code stepDone} moves a step out of
+     * {@code Pending} without the claim, and this worker still holds it, so the step carries an earlier receipt.
+     *
+     * @return true, to go on to the next step
+     * @throws IllegalStateException if the step is not {@code Done} after all
+     */
+    private boolean receiptKept(UUID requestId, DocumentDeletionStep step) {
+        DocumentDeletionStepState state = requests.stepsOf(requestId).stream()
+            .filter(found -> found.id().equals(step.id()))
+            .map(DocumentDeletionStep::state)
+            .findFirst()
+            .orElseThrow(LeaseLost::new);
+        if (state != DocumentDeletionStepState.Done) {
+            throw new IllegalStateException("Document deletion step " + step.id() + " left Pending without a receipt");
+        }
+        log.info("Document deletion request {}: step {} already has its receipt; the later answer is ignored",
+                 requestId, step.kind());
+        return true;
+    }
+
     private StepOutcome call(UUID requestId, DocumentDeletionStep step, LocalDateTime deadline) {
         try {
             return switch (step.kind()) {
                 case CCD_REFERENCE -> {
                     DocumentDeletionRequest request = requests.findById(requestId).orElseThrow(LeaseLost::new);
                     yield remote.removeCcdReference(request.caseId(), request.documentId(), step.locator(),
-                                                    () -> covers(deadline, properties.ccdCallAllowance()));
+                                                    () -> timeLeft(deadline, properties.ccdCallAllowance()));
                 }
-                case CDAM_BINARY -> remote.deleteCdamPermanently(UUID.fromString(step.locator()));
+                case CDAM_BINARY -> remote.deleteCdamPermanently(
+                    UUID.fromString(step.locator()), () -> timeLeft(deadline, properties.cdamCallAllowance()));
                 case LOCAL_FILE -> remote.removeLocalFile(step.locator());
             };
         } catch (LeaseLost lost) {
@@ -249,6 +281,29 @@ public class DocumentDeletionWork {
         }
     }
 
+    /**
+     * The step {@code Failed} and the request {@code NeedsAttention}, in one commit, so that a late receipt
+     * ({@code stepDone}, which takes the request's lock first) finds both or neither and can undo both.
+     *
+     * @return false, writing nothing, when the step was no longer {@code Pending}
+     */
+    private boolean failStep(UUID requestId, UUID owner, DocumentDeletionStep step, String code, boolean counted,
+                             DocumentDeletionFailure failure) {
+        boolean failed = owned(requestId, owner, () -> {
+            if (requests.stepFailed(step.id(), code, counted) == 0) {
+                return false;
+            }
+            if (!requests.release(requestId, owner, DocumentDeletionStatus.NeedsAttention, failure.name(), now())) {
+                throw new LeaseLost();
+            }
+            return true;
+        });
+        if (failed) {
+            log.warn("Document deletion request {} needs attention: {}", requestId, failure);
+        }
+        return failed;
+    }
+
     private void needsAttention(UUID requestId, UUID owner, DocumentDeletionFailure failure) {
         log.warn("Document deletion request {} needs attention: {}", requestId, failure);
         release(requestId, owner, DocumentDeletionStatus.NeedsAttention, failure.name(), now());
@@ -268,7 +323,12 @@ public class DocumentDeletionWork {
     }
 
     private boolean covers(LocalDateTime deadline, Duration allowance) {
-        return !now().plus(allowance).isAfter(deadline);
+        return !timeLeft(deadline, allowance).isNegative();
+    }
+
+    /** How long a call with this allowance may still wait before it starts; negative once it may not start. */
+    private Duration timeLeft(LocalDateTime deadline, Duration allowance) {
+        return Duration.between(now().plus(allowance), deadline);
     }
 
     private LocalDateTime now() {

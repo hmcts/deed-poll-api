@@ -16,7 +16,11 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRe
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRemote.Verdict;
 
 import java.time.Duration;
+import java.util.Iterator;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.anyRequestedFor;
@@ -28,6 +32,8 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -92,6 +98,64 @@ class CdamPermanentDeleteTest {
             .withHeader("Authorization", equalTo("Bearer system-user"))
             .withHeader("ServiceAuthorization", equalTo("Bearer service")));
         CDAM.verify(0, deleteRequestedFor(urlPathEqualTo(PATH)).withQueryParam("permanent", equalTo("false")));
+    }
+
+    @Test
+    @DisplayName("a budget spent by the token grants sends no delete: not sent, and not a try")
+    void outOfTimeAfterTokens() {
+        CDAM.stubFor(delete(urlPathEqualTo(PATH)).willReturn(aResponse().withStatus(204)));
+
+        assertThat(cdam.delete(DOCUMENT, () -> Duration.ofMillis(-1))).isEqualTo(StepOutcome.notSent("OUT_OF_TIME"));
+
+        // Time left for the first grant, gone by the second: the service's grant is never waited for.
+        Iterator<Duration> left = List.of(Duration.ofSeconds(5), Duration.ofMillis(-1)).iterator();
+        assertThat(cdam.delete(DOCUMENT, left::next)).isEqualTo(StepOutcome.notSent("OUT_OF_TIME"));
+        verify(generator, never()).generate();
+
+        CDAM.verify(0, deleteRequestedFor(urlPathEqualTo(PATH)));
+    }
+
+    @Test
+    @DisplayName("a token grant that hangs is waited for only as long as the budget allows, and sends nothing")
+    void hungGrantIsBounded() throws InterruptedException {
+        CDAM.stubFor(delete(urlPathEqualTo(PATH)).willReturn(aResponse().withStatus(204)));
+        CountDownLatch release = new CountDownLatch(1);
+        when(systemUser.accessToken()).thenAnswer(invocation -> {
+            release.await(10, TimeUnit.SECONDS);
+            return "Bearer system-user";
+        });
+        long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
+
+        long started = System.nanoTime();
+        try {
+            assertThat(cdam.delete(DOCUMENT, () -> Duration.ofNanos(deadline - System.nanoTime())))
+                .isEqualTo(StepOutcome.notSent("OUT_OF_TIME"));
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+        } finally {
+            release.countDown();
+        }
+        CDAM.verify(0, deleteRequestedFor(urlPathEqualTo(PATH)));
+    }
+
+    @Test
+    @DisplayName("a token grant that fails within the budget is a try, as it was")
+    void failedGrantWithinBudget() {
+        when(generator.generate()).thenThrow(new IllegalStateException("s2s down"));
+
+        assertThat(cdam.delete(DOCUMENT, () -> Duration.ofSeconds(5)))
+            .isEqualTo(StepOutcome.retry("TOKEN_UNAVAILABLE"));
+        CDAM.verify(0, deleteRequestedFor(urlPathEqualTo(PATH)));
+    }
+
+    @Test
+    @DisplayName("tokens in hand within the budget: the delete is sent with them")
+    void withinBudget() {
+        CDAM.stubFor(delete(urlPathEqualTo(PATH)).willReturn(aResponse().withStatus(204)));
+
+        assertThat(cdam.delete(DOCUMENT, () -> Duration.ofSeconds(5))).isEqualTo(StepOutcome.done("DELETED"));
+        CDAM.verify(1, deleteRequestedFor(urlPathEqualTo(PATH))
+            .withHeader("Authorization", equalTo("Bearer system-user"))
+            .withHeader("ServiceAuthorization", equalTo("Bearer service")));
     }
 
     @Test

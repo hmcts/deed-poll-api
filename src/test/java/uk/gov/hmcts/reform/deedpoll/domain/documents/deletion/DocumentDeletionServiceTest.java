@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionTestDocumentType;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentToStore;
@@ -28,6 +29,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionSe
 import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionService.DocumentDeletionCommand;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
+import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageStates;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionAdmissionRepository;
@@ -100,6 +102,9 @@ class DocumentDeletionServiceTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private AuditTrail audit;
+
+    @Autowired
+    private DocumentStorageStates storageStates;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -579,6 +584,40 @@ class DocumentDeletionServiceTest extends AbstractPostgresContainerTest {
         } finally {
             pool.shutdownNow();
         }
+        assertThat(requestCount(caseId)).isZero();
+    }
+
+    @Test
+    @DisplayName("a storage-state move under way when admission starts: admission waits for it, never a deadlock")
+    void storageMoveBeforeAdmission() throws Exception {
+        String caseId = fixture();
+        String documentId = document(caseId, "UploadPending", null, null, 1);
+        DocumentStorageStates.Claim claim = new DocumentStorageStates.Claim(
+            caseId, documentId, new DocumentOwner(caseId, Optional.of("1234567890123456")));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch moved = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            // The production move, held open: its row update fires V49's fence trigger at commit.
+            final Future<?> mover = pool.submit(() -> transaction().executeWithoutResult(status -> {
+                storageStates.uploadUncertain(claim);
+                moved.countDown();
+                await(release);
+            }));
+            assertThat(moved.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+            final Future<Object> admission = pool.submit(() -> outcome(() -> admit(caseId, documentId,
+                                                                               UUID.randomUUID())));
+            awaitLockWaiters(1);
+            release.countDown();
+            mover.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+            assertThat(admission.get(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                .isInstanceOf(DocumentDeletionConflictError.class);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("SELECT \"storageState\"::text FROM deedpoll_supportingdocument WHERE id = ?",
+                                       String.class, documentId)).isEqualTo("UploadUncertain");
         assertThat(requestCount(caseId)).isZero();
     }
 
