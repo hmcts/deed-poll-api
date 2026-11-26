@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
@@ -652,6 +653,37 @@ class DocumentDeletionServiceTest extends AbstractPostgresContainerTest {
         assertThat(jdbc.queryForObject("SELECT \"storageState\"::text FROM deedpoll_supportingdocument WHERE id = ?",
                                        String.class, documentId)).isEqualTo("UploadUncertain");
         assertThat(requestCount(caseId)).isZero();
+    }
+
+    @Test
+    @DisplayName("a metadata update takes the case before the document, so it never deadlocks with admission")
+    void metadataUpdateLocksTheCaseFirst() throws Exception {
+        String caseId = fixture();
+        String documentId = document(caseId, "Local", "files/" + UUID.randomUUID(), null, 0);
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        try {
+            transaction().executeWithoutResult(held -> {
+                // Admission's first lock: the case FOR UPDATE.
+                jdbc.queryForList("SELECT id FROM deedpoll_deedpoll WHERE id = ? FOR UPDATE", caseId);
+                final Future<?> updater = pool.submit(() -> documentService.updateDocument(caseId, documentId,
+                    new UpdateDocumentInput(PatchField.absent(), PatchField.of("Renamed"), PatchField.absent(),
+                                            PatchField.absent(), PatchField.absent(), PatchField.absent())));
+                awaitLockWaiters(1);
+                // Admission's second lock: the document. Free means the update is queued on the case and has not
+                // taken the document, so admission would not wait for it while the update waits for the case.
+                TransactionTemplate probe = transaction();
+                probe.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                probe.executeWithoutResult(status -> assertThat(jdbc.queryForList(
+                    "SELECT id FROM deedpoll_supportingdocument WHERE id = ? FOR UPDATE NOWAIT", documentId))
+                    .as("the update must not hold the document while it waits for the case").hasSize(1));
+                assertThat(updater.isDone()).isFalse();
+            });
+        } finally {
+            pool.shutdown();
+            assertThat(pool.awaitTermination(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+        }
+        assertThat(jdbc.queryForObject("SELECT name FROM deedpoll_supportingdocument WHERE id = ?", String.class,
+                                       documentId)).isEqualTo("Renamed");
     }
 
     @Test
