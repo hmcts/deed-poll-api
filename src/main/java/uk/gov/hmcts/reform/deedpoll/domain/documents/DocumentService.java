@@ -182,6 +182,19 @@ public class DocumentService {
     }
 
     /**
+     * One document of one case, locked for the rest of the write, and refused once a permanent document deletion
+     * request names it (plan 20261125-permanent-document-deletion, Task 3). The lock makes a write that raced
+     * admission wait for it, and the fence is then asked in a fresh statement, so neither a metadata patch nor the
+     * internal soft removal can reach a document whose permanent deletion has been admitted.
+     */
+    private DeedPollSupportingDocument lockDocument(String deedPollId, String id) {
+        DeedPollSupportingDocument document = documents.findUnfencedByIdAndDeedPollIdForUpdate(id, deedPollId)
+            .orElseThrow(() -> new NotFoundError("Document " + id + " not found"));
+        initialiseType(document);
+        return document;
+    }
+
+    /**
      * Amends a document's metadata.
      *
      * <p>Only the fields the patch names are written, and a named-as-null nullable field is cleared rather
@@ -193,7 +206,7 @@ public class DocumentService {
      */
     @Transactional
     public DeedPollSupportingDocument updateDocument(String deedPollId, String id, UpdateDocumentInput dto) {
-        DeedPollSupportingDocument document = findDocument(deedPollId, id);
+        DeedPollSupportingDocument document = lockDocument(deedPollId, id);
         final Map<String, Object> before = DocumentUploadAudit.metadata(document);
         // Resolved before anything is written, so a bad type cannot leave a half-applied patch behind.
         Optional<DeedPollSupportingDocumentType> type = dto.documentTypeId().present()
@@ -259,7 +272,7 @@ public class DocumentService {
      */
     @Transactional
     public void removeDocument(String deedPollId, String id) {
-        DeedPollSupportingDocument document = findDocument(deedPollId, id);
+        DeedPollSupportingDocument document = lockDocument(deedPollId, id);
         leaveTombstone(deedPollId, document);
         String storageKey = cleanupLocator(document);
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();

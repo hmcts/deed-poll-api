@@ -40,8 +40,9 @@ versions, date, expected bytes and observed status codes. Keep tokens out of the
    gets 502 through the upstream error wrapping described in the recovery guide, still with no bytes. Record
    that separately rather than counting it as proof of CCD's READ check. Request the same local document ID under a different case UUID: expect
    404 before CDAM is called. Upload against an unlinked case: expect 409 and no remote upload.
-6. Delete through `DocumentService.removeDocument` using an approved operator/test harness. **There is no public
-   HTTP document-delete endpoint; do not add one or delete the database row by SQL to simulate this step.**
+6. Delete through `DocumentService.removeDocument` using an approved operator/test harness. **`removeDocument` has no HTTP
+   route; do not delete the database row by SQL to simulate this step.** Staff permanent deletion is a different
+   path, rehearsed by [DOCUMENT-DELETION-SMOKE.md](DOCUMENT-DELETION-SMOKE.md).
    Confirm the local row and CCD document reference are gone, then request the remote binary through CDAM using
    an authorised user and service token: expect 404. Confirm dm-store received `permanent=false`.
 

@@ -427,7 +427,7 @@ class CdamDocumentUploadsTest {
         String removedFrom;
 
         Row() {
-            super(null, null, null, null);
+            super(null, null, null, null, null);
         }
 
         private Claim theClaim() {

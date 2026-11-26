@@ -11,10 +11,14 @@ import uk.gov.hmcts.reform.ccd.client.model.CaseDataContent;
 import uk.gov.hmcts.reform.ccd.client.model.StartEventResponse;
 import uk.gov.hmcts.reform.deedpoll.storage.DocumentStoreProperties;
 
+import java.time.Duration;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -116,6 +120,60 @@ class CaseDocumentsEventTest {
             .hasMessage("Not submitted: CCD answered HTTP 404")
             .hasNoCause();
         verify(ccd, never()).createEvent(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a budget spent by the token grants starts nothing; one spent by the start submits nothing")
+    void budgetAskedBeforeEachCall() {
+        when(ccd.startEvent(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(StartEventResponse.builder().token("event-token").build());
+
+        assertThat(event.submit("123", DOCUMENTS, () -> Duration.ofMillis(-1))).isFalse();
+        verify(ccd, never()).startEvent(anyString(), anyString(), anyString(), anyString());
+
+        // Time for the first grant, none by the second: S2S is never waited for and nothing starts.
+        Iterator<Duration> grants = List.of(Duration.ofSeconds(5), Duration.ofMillis(-1)).iterator();
+        assertThat(event.submit("123", DOCUMENTS, grants::next)).isFalse();
+        verify(s2s, never()).generate();
+        verify(ccd, never()).startEvent(anyString(), anyString(), anyString(), anyString());
+
+        // Time for both grants and the start, none for the submission.
+        Iterator<Duration> answers = List.of(Duration.ofSeconds(5), Duration.ofSeconds(5), Duration.ofSeconds(5),
+                                             Duration.ofMillis(-1)).iterator();
+        assertThat(event.submit("123", DOCUMENTS, answers::next)).isFalse();
+        verify(ccd).startEvent(anyString(), anyString(), anyString(), anyString());
+        verify(ccd, never()).createEvent(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a token grant that hangs is waited for only as long as the budget allows, and starts nothing")
+    void hungGrantIsBounded() {
+        CountDownLatch release = new CountDownLatch(1);
+        when(systemUser.accessToken()).thenAnswer(invocation -> {
+            release.await(10, TimeUnit.SECONDS);
+            return "Bearer system";
+        });
+        long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
+        long started = System.nanoTime();
+        try {
+            assertThat(event.submit("123", DOCUMENTS, () -> Duration.ofNanos(deadline - System.nanoTime())))
+                .isFalse();
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+        } finally {
+            release.countDown();
+        }
+        verify(ccd, never()).startEvent(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("a token grant that fails within the budget is NotSubmitted, in fixed prose")
+    void failedGrantWithinBudget() {
+        when(s2s.generate()).thenThrow(new IllegalStateException("s2s down"));
+
+        assertThatThrownBy(() -> event.submit("123", DOCUMENTS, () -> Duration.ofSeconds(5)))
+            .isInstanceOf(CaseDocumentsEvent.NotSubmitted.class)
+            .hasNoCause();
+        verify(ccd, never()).startEvent(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test

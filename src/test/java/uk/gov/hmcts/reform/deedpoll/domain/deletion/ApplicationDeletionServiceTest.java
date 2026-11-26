@@ -610,10 +610,13 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
     /**
      * Counts every backend waiting on a lock, not the statement: the first FOR UPDATE waiter waits on the holder's
      * transaction id and the next on the tuple, and pg_stat_activity can still show the earlier statement's text.
+     * Called inside the transaction holding the case lock, where Postgres keeps one statistics snapshot for the whole
+     * transaction, so each poll clears it first.
      */
     private void awaitLockWaiters(int count) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
         while (System.nanoTime() < deadline) {
+            jdbc.queryForList("SELECT pg_stat_clear_snapshot()");
             Integer waiting = jdbc.queryForObject("""
                 SELECT count(*) FROM pg_stat_activity
                 WHERE wait_event_type = 'Lock' AND datname = current_database()

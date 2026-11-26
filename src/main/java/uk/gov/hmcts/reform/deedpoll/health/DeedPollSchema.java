@@ -35,7 +35,7 @@ public class DeedPollSchema {
      * {@code src/test/resources/reference/deed-poll.prisma}, plus the two saved-query tables,
      * referrals, notifications, CCD creation attempts, deed preparations, retained payloads, owned stages
      * Gazette audit batches, the audit trail's events and values, the abuse limits' request budgets, and
-     * application deletion requests with their cleanup steps.
+     * application deletion requests with their cleanup steps, and document deletion requests with their steps.
      * These have no reference model because they are new behaviour rather than a port.
      *
      * <p>Listed explicitly rather than derived, and the reference's reason for that survives the port even
@@ -85,7 +85,9 @@ public class DeedPollSchema {
         "deedpoll_request_budget",
         "deedpoll_deletion_request",
         "deedpoll_deletion_step",
-        "deedpoll_removed_document"
+        "deedpoll_removed_document",
+        "deedpoll_document_deletion_request",
+        "deedpoll_document_deletion_step"
     );
 
     /**

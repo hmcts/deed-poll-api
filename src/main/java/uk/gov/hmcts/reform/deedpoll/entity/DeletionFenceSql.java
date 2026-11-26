@@ -31,6 +31,18 @@ public final class DeletionFenceSql {
         "NOT EXISTS (SELECT 1 FROM deedpoll_deletion_request fence WHERE fence.case_id = \"deedPollId\")";
 
     /**
+     * The entity restriction on {@link DeedPollSupportingDocument}: its case's fence, and the document's own (V51).
+     * Once a document deletion request names the row, every JPA read of it -- the case detail, a download, a
+     * preview, the judicial view, the CCD view, email history and the correspondence reader -- answers as if it were
+     * gone; other documents of the case are untouched. Entity-only: Hibernate qualifies the bare {@code id} with the
+     * row's alias, and in a native statement it would resolve to the request's own id. Recovery reads the row
+     * natively ({@code DocumentDeletionRequestRepository.lockDocumentRecord}).
+     */
+    public static final String DOCUMENT_RESTRICTION = UNFENCED_BY_DEED_POLL_ID
+        + " AND NOT EXISTS (SELECT 1 FROM deedpoll_document_deletion_request document_fence"
+        + " WHERE document_fence.document_id = id)";
+
+    /**
      * The predicate for a native statement that names the case table {@code d}.
      */
     public static final String UNFENCED_CASE =

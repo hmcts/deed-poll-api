@@ -46,6 +46,17 @@ public class DeletionFinalisationRepository {
     }
 
     /**
+     * Whether a permanent document deletion on the case is not {@code Completed}; finalisation's cascade would take
+     * its request and steps with the case.
+     */
+    public boolean hasUnresolvedDocumentDeletion(String caseId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM deedpoll_document_deletion_request
+                            WHERE case_id = ? AND status <> 'Completed')
+            """, Boolean.class, caseId));
+    }
+
+    /**
      * Whether any staged or deed preparation bytes are retained for the case: recovery evidence admission refused,
      * which nothing since may have written (V49) but which is asked again rather than assumed.
      */

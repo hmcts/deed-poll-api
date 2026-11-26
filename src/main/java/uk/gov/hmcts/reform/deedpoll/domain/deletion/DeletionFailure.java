@@ -40,6 +40,11 @@ public enum DeletionFailure {
     /** An owned stage names the case that the inventory did not list, so the fence did not hold for it. */
     UNLISTED_OWNED_STAGE,
     /**
+     * A permanent document deletion on the case has not completed, which admission refused and the fence should have
+     * kept from starting: finalisation would cascade its request and steps away, so nothing local is removed.
+     */
+    DOCUMENT_DELETION_UNRESOLVED,
+    /**
      * The database refused local finalisation (a restricting key or a protecting trigger), and the transaction rolled
      * back: nothing local was removed and no completion was recorded.
      */

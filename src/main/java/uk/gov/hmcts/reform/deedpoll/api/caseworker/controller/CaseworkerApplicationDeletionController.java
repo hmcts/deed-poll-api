@@ -9,21 +9,17 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import org.springframework.http.CacheControl;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.InvalidMediaTypeException;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 import uk.gov.hmcts.reform.deedpoll.api.ApiError;
 import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
+import uk.gov.hmcts.reform.deedpoll.api.BoundedJsonBodies;
 import uk.gov.hmcts.reform.deedpoll.api.DeletionError;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateDeletionRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DeletionAdmissionResponse;
@@ -41,11 +37,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
 
 import jakarta.servlet.http.HttpServletRequest;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
-import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -124,7 +116,8 @@ public class CaseworkerApplicationDeletionController {
     @ApiResponse(responseCode = "415", description = "The body is not application/json. Nothing is written.")
     @ApiResponse(responseCode = "409", description = "Refused, with a code and fixed words, and nothing written: "
         + "STALE_CONFIRMATION (review the application again), RETAINED_PERMANENTLY, GAZETTE_EVIDENCE, "
-        + "RETAINED_DEED_PAYLOAD, RETAINED_STAGED_UPLOADS, DOCUMENT_STORAGE_UNRESOLVED, CCD_CREATION_UNRESOLVED, "
+        + "RETAINED_DEED_PAYLOAD, RETAINED_STAGED_UPLOADS, DOCUMENT_STORAGE_UNRESOLVED, "
+        + "DOCUMENT_DELETION_UNRESOLVED (a document's permanent deletion has not completed), CCD_CREATION_UNRESOLVED, "
         + "EMAIL_SEND_UNRESOLVED (try again once it settles), KEY_REUSED or CONFLICTING_REASON.",
         content = @Content(schema = @Schema(implementation = DeletionError.class)))
     @AuditedAs(AuditAction.CASE_DELETION_REQUESTED)
@@ -196,67 +189,11 @@ public class CaseworkerApplicationDeletionController {
     }
 
     /**
-     * The body, read and decoded only once the caller is known to hold {@code DELETE_APPLICATION}: no more than
-     * {@link #MAX_BODY_BYTES} of it is ever held, and only JSON is decoded. An absent body is null, which the
-     * service refuses field by field. Unparseable JSON is the service's ordinary unreadable-body 400, which names
-     * nothing the caller sent.
+     * The body, read and decoded only once the caller is known to hold {@code DELETE_APPLICATION}: see {@link
+     * BoundedJsonBodies}.
      */
     private CreateDeletionRequest decode(HttpServletRequest http) throws HttpMediaTypeNotSupportedException {
-        refuseForm(http.getHeader(HttpHeaders.CONTENT_TYPE));
-        byte[] raw;
-        try (InputStream in = http.getInputStream()) {
-            raw = in.readNBytes(MAX_BODY_BYTES + 1);
-        } catch (IOException unreadable) {
-            throw new HttpMessageNotReadableException("The deletion request body could not be read", unreadable, null);
-        }
-        if (raw.length == 0) {
-            return null;
-        }
-        if (raw.length > MAX_BODY_BYTES) {
-            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
-        }
-        requireJson(http.getHeader(HttpHeaders.CONTENT_TYPE));
-        try {
-            return json.readValue(raw, CreateDeletionRequest.class);
-        } catch (IOException unreadable) {
-            throw new HttpMessageNotReadableException("The deletion request body is not valid JSON", unreadable, null);
-        }
-    }
-
-    /**
-     * Refuses 415 for a form body before the stream is read. The dispatcher has already parsed a multipart body into
-     * parts, so its stream reads as empty and would otherwise reach the service's field-by-field 400s; a urlencoded
-     * body is refused alike, so neither form is ever answered as though it were a missing JSON body.
-     */
-    private static void refuseForm(String header) throws HttpMediaTypeNotSupportedException {
-        if (header == null) {
-            return;
-        }
-        String type = header.trim().toLowerCase(Locale.ROOT);
-        if (type.startsWith("multipart/") || type.startsWith("application/x-www-form-urlencoded")) {
-            throw new HttpMediaTypeNotSupportedException((MediaType) null, List.of(MediaType.APPLICATION_JSON));
-        }
-    }
-
-    /**
-     * Refuses 415 unless the body is {@code application/json} or an {@code application/*+json}.
-     */
-    private static void requireJson(String header) throws HttpMediaTypeNotSupportedException {
-        List<MediaType> supported = List.of(MediaType.APPLICATION_JSON);
-        if (header == null || header.isBlank()) {
-            throw new HttpMediaTypeNotSupportedException((MediaType) null, supported);
-        }
-        MediaType type;
-        try {
-            type = MediaType.parseMediaType(header);
-        } catch (InvalidMediaTypeException unparseable) {
-            throw new HttpMediaTypeNotSupportedException((MediaType) null, supported);
-        }
-        boolean isJson = "application".equals(type.getType())
-            && ("json".equals(type.getSubtype()) || type.getSubtype().endsWith("+json"));
-        if (!isJson) {
-            throw new HttpMediaTypeNotSupportedException(type, supported);
-        }
+        return BoundedJsonBodies.read(http, json, CreateDeletionRequest.class, MAX_BODY_BYTES);
     }
 
     private static CurrentUser deletionCaller() {

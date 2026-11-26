@@ -18,6 +18,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeletionFenceRepository;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -49,15 +50,18 @@ public class DocumentStorageStates {
     private final DeedPollSupportingDocumentRepository documents;
     private final DeedPollSupportingDocumentTypeRepository types;
     private final DocumentUploadAudit uploadAudit;
+    private final DeletionFenceRepository cases;
 
     public DocumentStorageStates(DeedPollRepository deedPolls,
                                  DeedPollSupportingDocumentRepository documents,
                                  DeedPollSupportingDocumentTypeRepository types,
-                                 DocumentUploadAudit uploadAudit) {
+                                 DocumentUploadAudit uploadAudit,
+                                 DeletionFenceRepository cases) {
         this.deedPolls = deedPolls;
         this.documents = documents;
         this.types = types;
         this.uploadAudit = uploadAudit;
+        this.cases = cases;
     }
 
     /**
@@ -219,7 +223,8 @@ public class DocumentStorageStates {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean attachedOnTheCase(String deedPollId, String documentId, UUID cdamDocumentId) {
-        Optional<DeedPollSupportingDocument> found = documents.findByIdAndDeedPollIdForUpdate(documentId, deedPollId);
+        Optional<DeedPollSupportingDocument> found =
+            documents.findUnfencedByIdAndDeedPollIdForUpdate(documentId, deedPollId);
         if (found.isEmpty()) {
             return false;
         }
@@ -309,8 +314,17 @@ public class DocumentStorageStates {
         row.setStorageState(to);
     }
 
+    /**
+     * The case {@code FOR KEY SHARE}, then the document {@code FOR UPDATE}: the shared lock order (case, then
+     * document). The row's update fires V49's fence trigger, which takes the case {@code FOR KEY SHARE} at commit;
+     * taken only then, after the document, a document deletion admission holding the case {@code FOR UPDATE} and
+     * waiting for the document would deadlock with this move. Taken first, admission waits for the move to commit.
+     */
     private DeedPollSupportingDocument lock(Claim claim) {
-        return documents.findByIdAndDeedPollIdForUpdate(claim.documentId(), claim.deedPollId())
+        if (!cases.shareCase(claim.deedPollId())) {
+            throw gone(claim);
+        }
+        return documents.findUnfencedByIdAndDeedPollIdForUpdate(claim.documentId(), claim.deedPollId())
             .orElseThrow(() -> gone(claim));
     }
 

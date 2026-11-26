@@ -27,6 +27,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewError;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRefusal;
 
@@ -166,6 +167,17 @@ public class DomainErrorHandler {
     public ResponseEntity<DeletionError> deletion(DeletionConflictError error) {
         return ResponseEntity.status(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
             .cacheControl(CacheControl.noStore()).body(DeletionError.from(error));
+    }
+
+    /**
+     * A refused document deletion request: the same shape as {@link #deletion}, with the document refusal's code.
+     * More specific than {@link ConflictError}, so Spring picks this one; {@code no-store}, as the route's other
+     * answers are.
+     */
+    @ExceptionHandler(DocumentDeletionConflictError.class)
+    public ResponseEntity<DocumentDeletionError> documentDeletion(DocumentDeletionConflictError error) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
+            .cacheControl(CacheControl.noStore()).body(DocumentDeletionError.from(error));
     }
 
     /**

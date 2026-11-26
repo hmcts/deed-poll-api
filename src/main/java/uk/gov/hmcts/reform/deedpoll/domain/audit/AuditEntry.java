@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.audit;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionNote;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionReason;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionReason;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -20,9 +21,9 @@ import java.util.UUID;
  *
  * <p>Nothing here is applicant data, which is why the event row is kept for seven years while its values are disposed
  * with the case. {@link #detail} is the one free-form part, so its keys are an allowlist of identifiers: a state, a
- * template id, an outcome, a batch id, a document type id, and a deletion's reason, note and request id, which
- * are typed and checked here. A value never goes in it -- that is what
- * {@link AuditValue} and its own table are for.
+ * template id, an outcome, a batch id, a document type id, an application deletion's reason, note and request id,
+ * and a document deletion's reason and request id, which are typed and checked here. A value never goes in it --
+ * that is what {@link AuditValue} and its own table are for.
  *
  * @param caseId the owning case, or null for an entity no case owns (a saved query, the Gazette settings)
  */
@@ -44,11 +45,22 @@ public record AuditEntry(AuditAction action, AuditActor actor, String entityType
     public static final String DELETION_REQUEST_ID = "deletionRequestId";
 
     /**
+     * A staff member's {@link DocumentDeletionReason}, exactly as it parses: free text, checked as the request checks
+     * it, and never relaxed into {@link #DELETION_NOTE}'s rule or the other way round. It stays in the event when a
+     * later application disposal removes the case's audit values, so the reason survives with the event.
+     */
+    public static final String DOCUMENT_DELETION_REASON = "documentDeletionReason";
+
+    /** A document deletion request's id, as a canonical UUID. */
+    public static final String DOCUMENT_DELETION_REQUEST_ID = "documentDeletionRequestId";
+
+    /**
      * The only keys {@link #detail} may carry.
      */
     public static final Set<String> DETAIL_KEYS =
         Set.of("fromState", "toState", "templateId", "outcome", "batchId", "documentTypeId",
-               DELETION_REASON, DELETION_NOTE, DELETION_REQUEST_ID);
+               DELETION_REASON, DELETION_NOTE, DELETION_REQUEST_ID, DOCUMENT_DELETION_REASON,
+               DOCUMENT_DELETION_REQUEST_ID);
 
     public AuditEntry {
         Objects.requireNonNull(action, "action");
@@ -84,7 +96,7 @@ public record AuditEntry(AuditAction action, AuditActor actor, String entityType
         return new AuditEntry(action, actor, entityType, entityId, caseId, fields, next);
     }
 
-    /** The detail's keys and never its values: a deletion note in a log would outlive any disposal. */
+    /** The detail's keys and never its values: a deletion note or reason in a log would outlive any disposal. */
     @Override
     public String toString() {
         return "AuditEntry[action=" + action + ", entityType=" + entityType + ", entityId=" + entityId
@@ -104,11 +116,18 @@ public record AuditEntry(AuditAction action, AuditActor actor, String entityType
             .withDetail(DELETION_REQUEST_ID, requestId.toString());
     }
 
+    /** This event with a document deletion request's reason and id. */
+    public AuditEntry withDocumentDeletion(DocumentDeletionReason reason, UUID requestId) {
+        return withDetail(DOCUMENT_DELETION_REASON, reason.value())
+            .withDetail(DOCUMENT_DELETION_REQUEST_ID, requestId.toString());
+    }
+
     /** The deletion keys are typed: a value that is not one of theirs is refused, and never echoed. */
     private static void requireTyped(String key, String value) {
         boolean valid = switch (key) {
             case DELETION_REASON -> DeletionReason.fromName(value).isPresent();
-            case DELETION_REQUEST_ID -> isCanonicalUuid(value);
+            case DELETION_REQUEST_ID, DOCUMENT_DELETION_REQUEST_ID -> isCanonicalUuid(value);
+            case DOCUMENT_DELETION_REASON -> DocumentDeletionReason.isParsed(value);
             case DELETION_NOTE -> isParsedNote(value);
             default -> true;
         };

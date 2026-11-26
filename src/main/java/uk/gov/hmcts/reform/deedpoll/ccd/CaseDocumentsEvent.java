@@ -9,9 +9,12 @@ import uk.gov.hmcts.reform.ccd.client.model.Event;
 import uk.gov.hmcts.reform.ccd.client.model.StartEventResponse;
 import uk.gov.hmcts.reform.deedpoll.storage.DocumentStoreProperties;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Sets a case's supporting documents in CCD by event, which is how a CDAM upload is attached (plan 03a, task 4).
@@ -84,13 +87,42 @@ public class CaseDocumentsEvent {
     public void submit(String caseReference, List<SupportingDocumentReference> documents) {
         String user;
         String service;
-        CaseDataContent payload;
         try {
             user = systemUser.accessToken();
             service = serviceTokens.getObject().generate();
         } catch (RuntimeException failure) {
             throw new NotSubmitted("Not submitted: " + CcdLinkingService.describe("IDAM or S2S", failure));
         }
+        submit(caseReference, documents, user, service, () -> Duration.ZERO);
+    }
+
+    /**
+     * {@link #submit(String, List)} within a permanent document deletion's budget: each token grant is waited for
+     * only while {@code timeLeft} is not negative ({@link TokenGrants}), and it is asked again between the start and
+     * the submission, so neither a cold grant nor a slow start lets a call begin that could outlast the staff
+     * member's request.
+     *
+     * @param timeLeft how long is left before the call must have started; negative means it must not
+     * @return true once submitted; false when time ran out, so nothing was submitted
+     * @throws NotSubmitted if the tokens or the start failed, so nothing was submitted
+     * @throws RuntimeException whatever {@code createEvent} threw, for the caller to classify
+     */
+    public boolean submit(String caseReference, List<SupportingDocumentReference> documents,
+                          Supplier<Duration> timeLeft) {
+        Optional<TokenGrants.Tokens> tokens;
+        try {
+            tokens = TokenGrants.within(timeLeft, systemUser::accessToken,
+                                        () -> serviceTokens.getObject().generate());
+        } catch (RuntimeException failure) {
+            throw new NotSubmitted("Not submitted: " + CcdLinkingService.describe("IDAM or S2S", failure));
+        }
+        return tokens.isPresent()
+            && submit(caseReference, documents, tokens.get().user(), tokens.get().service(), timeLeft);
+    }
+
+    private boolean submit(String caseReference, List<SupportingDocumentReference> documents, String user,
+                           String service, Supplier<Duration> timeLeft) {
+        CaseDataContent payload;
         try {
             StartEventResponse start = ccd.startEvent(user, service, caseReference, EVENT_ID);
             if (start == null || start.getToken() == null || start.getToken().isBlank()) {
@@ -100,7 +132,11 @@ public class CaseDocumentsEvent {
         } catch (RuntimeException failure) {
             throw new NotSubmitted("Not submitted: " + CcdLinkingService.describe(failure));
         }
+        if (timeLeft.get().isNegative()) {
+            return false;
+        }
         ccd.createEvent(user, service, caseReference, payload);
+        return true;
     }
 
     CaseDataContent content(List<SupportingDocumentReference> documents, String eventToken) {

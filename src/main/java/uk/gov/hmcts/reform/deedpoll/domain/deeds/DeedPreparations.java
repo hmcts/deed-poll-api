@@ -153,7 +153,7 @@ public class DeedPreparations {
     @Transactional
     public void requireCurrent(String caseId, PreparedDeed prepared) {
         final var current = cases.findById(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
-        var document = documents.findByIdAndDeedPollIdForUpdate(prepared.documentId(), caseId)
+        var document = documents.findUnfencedByIdAndDeedPollIdForUpdate(prepared.documentId(), caseId)
             .orElseThrow(DeedPreparations::unavailable);
         deeds.requireCompatible(document, prepared.template());
         if (document.getStorageState() != DocumentStorageState.Attached || document.getCdamDocumentId() == null
@@ -202,7 +202,7 @@ public class DeedPreparations {
             throw new UpstreamFailureError("The stored deed could not be verified; its preparation was kept");
         }
         transaction.executeWithoutResult(status -> {
-            var document = documents.findByIdAndDeedPollIdForUpdate(prepared.documentId(), caseId)
+            var document = documents.findUnfencedByIdAndDeedPollIdForUpdate(prepared.documentId(), caseId)
                 .orElseThrow(DeedPreparations::unavailable);
             if (document.getStorageState() != DocumentStorageState.Attached
                 || !Objects.equals(document.getCdamDocumentId(), download.document().getCdamDocumentId())) {

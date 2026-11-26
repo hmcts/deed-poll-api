@@ -15,8 +15,10 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.Generated;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.SQLRestriction;
+import org.hibernate.generator.EventType;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
@@ -34,8 +36,9 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "deedpoll_supportingdocument")
-// The deletion fence, by the row's case (DeletionFenceSql): a fenced case's children read as gone.
-@SQLRestriction(DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID)
+// The deletion fences (DeletionFenceSql): a fenced case's children, and a document a deletion request names, read
+// as gone.
+@SQLRestriction(DeletionFenceSql.DOCUMENT_RESTRICTION)
 @Getter
 @Setter
 public class DeedPollSupportingDocument {
@@ -94,6 +97,14 @@ public class DeedPollSupportingDocument {
 
     @Column(name = "storageUploadAttempts", nullable = false)
     private short storageUploadAttempts;
+
+    // The reviewed version (V51): its own BEFORE UPDATE trigger increments it when a reviewed column changes, so it
+    // is never written from here. Hibernate reads it back after every insert and update, so a response built from
+    // the entity after a write (an upload's attach move) publishes the version a deletion must send, not the one
+    // before it.
+    @Generated(event = {EventType.INSERT, EventType.UPDATE})
+    @Column(name = "version", nullable = false, insertable = false, updatable = false)
+    private long version = 1;
 
     @Column(name = "createdOn", nullable = false)
     private LocalDateTime createdOn;

@@ -27,8 +27,10 @@ import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository.Removed
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -322,6 +324,11 @@ public class ApplicationDeletionService {
         if (admission.hasUnresolvedDocumentStorage(id)) {
             throw new DeletionConflictError(DeletionRefusal.DOCUMENT_STORAGE_UNRESOLVED);
         }
+        // Under the same FOR UPDATE case lock a document deletion's admission takes, so one admitted meanwhile has
+        // committed and is seen; one admitted later meets this request's fence (its own check and V51's trigger).
+        if (admission.hasUnresolvedDocumentDeletion(id)) {
+            throw new DeletionConflictError(DeletionRefusal.DOCUMENT_DELETION_UNRESOLVED);
+        }
         if (admission.hasUnresolvedCcdCreation(id)) {
             throw new DeletionConflictError(DeletionRefusal.CCD_CREATION_UNRESOLVED);
         }
@@ -341,6 +348,10 @@ public class ApplicationDeletionService {
      * {@link DeletionStepKind#LOCAL_DOCUMENT} (its unlink was best effort, so the worker removes and verifies it
      * again), a CDAM one as a {@link DeletionStepKind#CDAM_REMOVED_DOCUMENT}, which keeps the request from completing
      * until the dm-store team has purged it.
+     *
+     * <p>A document a member of staff permanently deleted (V51) is listed nowhere: its completion deleted the row and
+     * confirmed its remote steps, so it is not cleanup's to repeat, and it is never mistaken for a soft removal.
+     * One not yet completed was refused above ({@link DeletionRefusal#DOCUMENT_DELETION_UNRESOLVED}).
      */
     private void inventory(UUID requestId, LockedCase target) {
         for (DocumentLocation document : admission.documents(target.id())) {
@@ -352,7 +363,14 @@ public class ApplicationDeletionService {
                                     document.cdamDocumentId());
             }
         }
+        Set<String> permanentlyDeleted = new HashSet<>(admission.permanentlyDeletedDocuments(target.id()));
         for (RemovedDocument removed : removedDocuments.ofCase(target.id())) {
+            if (permanentlyDeleted.contains(removed.id())) {
+                // A completed permanent deletion is its own receipt: its binary was confirmed gone. A permanent
+                // deletion writes no tombstone, so this guards a tombstone and a receipt naming one id, which the
+                // conservative branch below would otherwise send to the dm-store team's manual purge.
+                continue;
+            }
             if ("Local".equals(removed.storageState())) {
                 requests.insertStep(UUID.randomUUID(), requestId, DeletionStepKind.LOCAL_DOCUMENT, removed.id(),
                                     removed.locator());

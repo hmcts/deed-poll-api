@@ -16,6 +16,8 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseEmailsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CorrespondenceDocumentResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DeletionAdmissionResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DeletionRequestResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentDeletionAdmissionResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentDeletionRequestResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailHistoryResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailPreviewResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailSlotDefaultsResponse;
@@ -425,13 +427,17 @@ class NotificationSecurityTest {
                        .map(RecordComponent::getName))
             .doesNotContain("requestId");
 
-        // The two deletion DTOs are the one exception, named exactly: their requestId is the deletion request's own
-        // resource id (the status Location's), never its Idempotency-Key, which the deletion controller's own test
-        // asserts is not echoed. A new class publishing a requestId still fails here.
+        // The application and document deletion DTOs are the one exception, named exactly: their requestId is the
+        // deletion request's own resource id (the status Location's), never its Idempotency-Key, which each deletion
+        // controller's own test asserts is not echoed. A new class publishing a requestId still fails here.
         noFields()
             .that().areDeclaredInClassesThat().resideInAPackage("uk.gov.hmcts.reform.deedpoll.api..")
             .and().areDeclaredInClassesThat().doNotHaveFullyQualifiedName(DeletionAdmissionResponse.class.getName())
             .and().areDeclaredInClassesThat().doNotHaveFullyQualifiedName(DeletionRequestResponse.class.getName())
+            .and().areDeclaredInClassesThat()
+            .doNotHaveFullyQualifiedName(DocumentDeletionAdmissionResponse.class.getName())
+            .and().areDeclaredInClassesThat()
+            .doNotHaveFullyQualifiedName(DocumentDeletionRequestResponse.class.getName())
             .should().haveName("requestId")
             .allowEmptyShould(true)
             .check(mainClasses());

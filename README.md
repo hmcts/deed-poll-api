@@ -41,6 +41,7 @@ four management-information reads that need `VIEW_MANAGEMENT_INFORMATION` (see
 [Management information](#management-information)),
 three Delivery Manager-only application-deletion operations that need `DELETE_APPLICATION` (see
 [Deleting an application](#deleting-an-application)),
+two document-deletion operations any staff role may call (see [Deleting a document](#deleting-a-document)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -570,6 +571,22 @@ Dispose task both ship off: with the worker off a request stays `Pending`, and w
 Dispose off a linked request stays `InProgress`; either way it is fenced and recoverable. The worker's settings
 (`APPLICATION_DELETION_WORKER_*`) are tabled in `docs/APPLICATION-DELETION.md`. Statuses, refusals and the recovery procedure are in `docs/APPLICATION-DELETION.md`.
 
+### Deleting a document
+
+Any member of staff the `/caseworker/**` rule admits (caseworker, Team leader, Delivery Manager, the deprecated admin
+role) can permanently delete one document of an application they can open; Masters cannot, and the judicial surface
+has no route. Two operations, counted apart as `DOCUMENT_DELETION_PATHS`:
+`POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests` (required UUID `Idempotency-Key`; closed JSON
+body `reason`, free text of 1–500 characters, and `expectedDocumentVersion`, the document's `documentVersion` as
+listed) and `GET /caseworker/cases/{id}/document-deletions/{requestId}`. The deletion runs in the request: 200
+`Completed` when the CCD reference, the binary (CDAM `permanent=true`, or the filesystem file) and the row are all
+gone, else 202 `InProgress` or `NeedsAttention` with a `Location`; a recovery sweep (`DOCUMENT_DELETION_RECOVERY_*`,
+on by default) finishes an `InProgress` one. Refusals are 409 `DOCUMENT_IN_USE` (a queued email naming it, an
+unverified deed preparation or a promotion), `DOCUMENT_CHANGED`, `DOCUMENT_STORAGE_UNRESOLVED`, `DOCUMENT_SHARED`,
+`APPLICATION_DELETION_PENDING` and `KEY_REUSED`, and none of them changes anything. Completion writes one
+`DOCUMENT_DELETED` audit event and one case note, both under the requester and with the reason. There is no grace
+period and no restore. Statuses, settings, limits and the runbook are in `docs/DOCUMENT-DELETION.md`.
+
 ## Documents and uploads
 
 Files go through the `DocumentStore` interface. `LocalFilesystemDocumentStore` remains the default, with blobs
@@ -1026,7 +1043,7 @@ There are two Kubernetes probes and they deliberately do not check the same thin
 ```
   {"status":"UP","components":{
     "db":{"status":"UP"},
-    "deedPollSchema":{"status":"UP","details":{"tables":25}},
+    "deedPollSchema":{"status":"UP","details":{"tables":36}},
     "readinessState":{"status":"UP"}}}
 ```
 

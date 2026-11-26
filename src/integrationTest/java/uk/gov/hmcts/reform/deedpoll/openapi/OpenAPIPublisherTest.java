@@ -25,6 +25,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRefusal;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionFailure;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionReason;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionRefusal;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFailure;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFormat;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewProperties;
@@ -174,6 +177,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/deletion-requests",
         "/caseworker/application-deletions/{requestId}",
         "/caseworker/application-deletions/{requestId}/restore"
+    );
+
+    /**
+     * A member of staff's permanent document deletion (plan 20261125-permanent-document-deletion), counted apart from
+     * {@link #CASEWORKER_PATHS} for the reason application deletion is: the caseworker count is a number the README
+     * states. Any staff role reaches them; there is no judicial counterpart, because Masters are read-only.
+     */
+    private static final List<String> DOCUMENT_DELETION_PATHS = List.of(
+        "/caseworker/cases/{id}/documents/{documentId}/deletion-requests",
+        "/caseworker/cases/{id}/document-deletions/{requestId}"
     );
 
     /** Delivery Manager-only publication history, whose single GET is asserted separately. */
@@ -808,6 +821,85 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
+     * The document deletion contract Admin generates its confirmation and status pages from: the closed body with the
+     * reason's published bounds, the required UUID header, 200 or 202 with its Location, the typed 409, a status read
+     * that publishes no reason, name, actor or locator, and {@code documentVersion} on the staff document projection
+     * only.
+     */
+    @DisplayName("Documents document deletion: closed body, required key, 200/202, typed 409, narrow status")
+    @Test
+    void documentsTheDocumentDeletion() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+        JsonNode paths = spec.get("paths");
+
+        assertThat(paths.get(DOCUMENT_DELETION_PATHS.get(0)).fieldNames()).toIterable().containsExactly("post");
+        assertThat(paths.get(DOCUMENT_DELETION_PATHS.get(1)).fieldNames()).toIterable().containsExactly("get");
+        assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(DOCUMENT_DELETION_PATHS);
+        assertThat(JUDICIAL_PATHS).noneMatch(path -> path.contains("deletion"));
+
+        JsonNode admission = paths.get(DOCUMENT_DELETION_PATHS.get(0)).get("post");
+        assertThat(admission.get("operationId").asText()).isEqualTo("requestDocumentDeletion");
+        assertThat(admission.get("description").asText()).contains("cannot be undone").contains("never a judge");
+        JsonNode key = parameterNamed(admission.get("parameters"), "Idempotency-Key");
+        assertThat(key.at("/in").asText()).isEqualTo("header");
+        assertThat(key.at("/required").asBoolean()).isTrue();
+        assertThat(key.at("/schema/format").asText()).isEqualTo("uuid");
+        assertThat(admission.at("/requestBody/required").asBoolean()).isTrue();
+        assertThat(admission.at("/responses").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("200", "202", "400", "403", "404", "409", "413", "415");
+        assertThat(admission.at("/responses/202/headers/Location").isMissingNode()).isFalse();
+        for (String code : List.of("200", "202")) {
+            JsonNode answer = resolve(spec, admission.at("/responses/" + code + "/content/*~1*/schema"));
+            assertThat(answer.get("properties").fieldNames()).toIterable()
+                .containsExactlyInAnyOrder("requestId", "status");
+        }
+        JsonNode conflict = resolve(spec, admission.at("/responses/409/content/*~1*/schema"));
+        assertThat(conflict.get("properties").fieldNames()).toIterable().containsExactlyInAnyOrder("error", "code");
+        List<String> codes = new ArrayList<>();
+        resolve(spec, conflict.at("/properties/code")).get("enum").forEach(code -> codes.add(code.asText()));
+        assertThat(codes).containsExactlyInAnyOrderElementsOf(
+            Arrays.stream(DocumentDeletionRefusal.values()).map(Enum::name).toList());
+
+        JsonNode body = spec.at("/components/schemas/CreateDocumentDeletionRequest");
+        assertThat(body.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("reason", "expectedDocumentVersion");
+        assertThat(body.get("required")).hasSize(2);
+        assertThat(body.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(body.at("/properties/reason/minLength").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/reason/maxLength").asInt()).isEqualTo(DocumentDeletionReason.MAX_LENGTH);
+        assertThat(body.at("/properties/reason/enum").isMissingNode()).as("free text, not a list").isTrue();
+        assertThat(body.at("/properties/expectedDocumentVersion/type").asText()).isEqualTo("integer");
+        assertThat(body.at("/properties/expectedDocumentVersion/minimum").asInt()).isOne();
+        assertThat(body.get("properties").fieldNames()).toIterable()
+            .as("no author, actor or time is accepted from the client")
+            .doesNotContain("author", "createdBy", "actor", "requestedBy", "requestedAt");
+
+        JsonNode read = paths.get(DOCUMENT_DELETION_PATHS.get(1)).get("get");
+        assertThat(read.get("operationId").asText()).isEqualTo("getDocumentDeletion");
+        assertThat(read.at("/responses").fieldNames()).toIterable().containsExactlyInAnyOrder("200", "403", "404");
+        JsonNode detail = resolve(spec, read.at("/responses/200/content/*~1*/schema"));
+        assertThat(detail.get("properties").fieldNames()).toIterable().containsExactlyInAnyOrder(
+            "requestId", "documentId", "status", "requestedAt", "completedAt", "failure");
+        List<String> statuses = new ArrayList<>();
+        resolve(spec, detail.at("/properties/status")).get("enum").forEach(state -> statuses.add(state.asText()));
+        assertThat(statuses).containsExactly("InProgress", "NeedsAttention", "Completed");
+        List<String> failures = new ArrayList<>();
+        resolve(spec, detail.at("/properties/failure")).get("enum").forEach(code -> failures.add(code.asText()));
+        assertThat(failures).containsExactlyInAnyOrderElementsOf(
+            Arrays.stream(DocumentDeletionFailure.values()).map(Enum::name).toList());
+
+        JsonNode document = spec.at("/components/schemas/DocumentResponse/properties");
+        assertThat(document.at("/documentVersion/type").asText()).isEqualTo("integer");
+        assertThat(document.at("/documentVersion/description").asText()).contains("expectedDocumentVersion");
+        assertThat(spec.at("/components/schemas/JudicialDocument/properties").has("documentVersion"))
+            .as("the judicial projection gains nothing").isFalse();
+    }
+
+    /**
      * Every documented path belongs to a list this class names -- so a route added outside both fails here.
      *
      * <p><strong>Added because the two counts above cannot see an addition.</strong> Each sums the operations of
@@ -841,6 +933,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.addAll(PREVIEW_PATHS);
         known.addAll(MI_PATHS);
         known.addAll(DELETION_PATHS);
+        known.addAll(DOCUMENT_DELETION_PATHS);
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
         known.add("/caseworker/process-settings");

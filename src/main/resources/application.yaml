@@ -448,6 +448,28 @@ deedpoll:
     # document URL outside its ccd.document.url.pattern, whose default host is dm-store:8080, and CDAM reads only the
     # last 36 characters as the document id (docs/CDAM-SEQUENCE.md section 1). Read only by the cdam store.
     document-url-base: ${DOCUMENT_URL_BASE:http://dm-store:8080}
+    # Permanent document deletion (DocumentDeletionProperties, plan 20261125-permanent-document-deletion): it runs
+    # in the staff member's own request, within request-budget (at most 25s), and a step whose allowance the budget no
+    # longer covers is left InProgress for the recovery sweep. The CDAM permanent delete has its own client and
+    # timeouts; the upload and download client's are unchanged.
+    deletion:
+      request-budget: ${DOCUMENT_DELETION_REQUEST_BUDGET:20s}
+      cdam-connect-timeout: ${DOCUMENT_DELETION_CDAM_CONNECT_TIMEOUT:2s}
+      cdam-read-timeout: ${DOCUMENT_DELETION_CDAM_READ_TIMEOUT:8s}
+      # One CCD call: the default Feign client's connect (5 s) plus read (10 s) timeout.
+      ccd-call-allowance: ${DOCUMENT_DELETION_CCD_CALL_ALLOWANCE:15s}
+      # Resumes admitted requests only, so it is on by default; it starts no deletion and is not application
+      # deletion's worker. Off, an interrupted request stays InProgress, never Completed.
+      recovery:
+        enabled: ${DOCUMENT_DELETION_RECOVERY_ENABLED:true}
+        interval: ${DOCUMENT_DELETION_RECOVERY_INTERVAL:PT1M}
+        batch-size: ${DOCUMENT_DELETION_RECOVERY_BATCH_SIZE:10}
+        # Longer than request-budget, so a request still working is never taken from it.
+        lease: ${DOCUMENT_DELETION_RECOVERY_LEASE:PT2M}
+        # A step's tries (and local completion's passes) before the request needs attention.
+        max-attempts: ${DOCUMENT_DELETION_RECOVERY_MAX_ATTEMPTS:8}
+        retry-base: ${DOCUMENT_DELETION_RECOVERY_RETRY_BASE:PT1M}
+        retry-cap: ${DOCUMENT_DELETION_RECOVERY_RETRY_CAP:PT1H}
     # Read-only PDF previews of a supporting document (PreviewProperties). Preview limits only: the input ceiling is
     # the upload's 25 MiB, and nothing here changes upload acceptance, original downloads or staging. A limit reached
     # is a fixed 422, never a truncated PDF. The budget includes conversion and must end inside the gateways' 30 s.
