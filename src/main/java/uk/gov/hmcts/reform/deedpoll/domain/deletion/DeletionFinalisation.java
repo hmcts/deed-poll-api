@@ -89,6 +89,9 @@ public class DeletionFinalisation {
         if (finalisation.hasRetainedPayload(caseId)) {
             throw new Refused(DeletionFailure.RETAINED_PAYLOAD);
         }
+        if (finalisation.hasUnresolvedDocumentDeletion(caseId)) {
+            throw new Refused(DeletionFailure.DOCUMENT_DELETION_UNRESOLVED);
+        }
 
         // Only finalisation completes an owned-stage line, in this transaction, so every one is still Pending here.
         for (DeletionStep stage : steps) {

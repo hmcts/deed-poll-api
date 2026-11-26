@@ -304,6 +304,49 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a document deletion that has not completed refuses finalisation, so its request is never cascaded "
+        + "away; a completed receipt is cascaded with the case")
+    void unresolvedDocumentDeletionRefuses() {
+        String id = populated(false);
+        DeletionRequest request = admit(id, "CREATED_IN_ERROR");
+        UUID receipt = UUID.randomUUID();
+        UUID unresolved = UUID.randomUUID();
+        pastTheFence("deedpoll_document_deletion_request", () -> {
+            documentRequest(receipt, id, "Completed");
+            documentRequest(unresolved, id, "InProgress");
+        });
+
+        assertThat(process()).hasValueSatisfying(made ->
+            assertThat(made.failure()).isEqualTo(DeletionFailure.DOCUMENT_DELETION_UNRESOLVED));
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.NeedsAttention);
+        assertThat(count("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", id)).isOne();
+        assertThat(count("SELECT count(*) FROM deedpoll_document_deletion_request WHERE case_id = ?", id))
+            .isEqualTo(2);
+        assertNoCompletion(id);
+
+        jdbc.update("DELETE FROM deedpoll_document_deletion_request WHERE id = ?", unresolved);
+        jdbc.update("UPDATE deedpoll_deletion_request SET status = 'InProgress', failure = NULL WHERE id = ?",
+                    request.id());
+        due(request);
+        process();
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.Completed);
+        assertThat(count("SELECT count(*) FROM deedpoll_document_deletion_request WHERE id = ?", receipt)).isZero();
+    }
+
+    /** A document deletion request as V51 holds it: a Completed receipt, or one still held with its reason. */
+    private void documentRequest(UUID requestId, String caseId, String status) {
+        boolean completed = "Completed".equals(status);
+        jdbc.update("""
+            INSERT INTO deedpoll_document_deletion_request (id, case_id, document_id, idempotency_key, reason,
+                document_name, fingerprint, expected_document_version, requested_by_subject, requested_by_name,
+                requested_at, status, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, repeat('a', 64), 1, 'finalisation-caseworker', 'Casey Worker', now(), ?, ?)
+            """, requestId, caseId, UUID.randomUUID().toString(), UUID.randomUUID(),
+                    completed ? null : "Uploaded in error", completed ? null : "Evidence", status,
+                    completed ? Timestamp.valueOf(AuditClock.now()) : null);
+    }
+
+    @Test
     @DisplayName("an audit failure rolls finalisation back; a retry after external completion records one completion")
     void auditFailureThenRetry() throws IOException {
         String id = populated(false);

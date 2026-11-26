@@ -145,6 +145,7 @@ refuses the delete; "none" means no foreign key, so a local delete leaves the ro
 | `deedpoll_stagedpayload` (V26) | none (by `id` = a preparation's `documentId` or an owned stage's `id`) | file bytes | delete explicitly |
 | `deedpoll_ownedstage` (V29) | none (`ownerKind = 'RECORD'` and `ownerId`, or `caseId`) | original file name, subject | delete explicitly (immutable-evidence trigger: needs a reviewed disposal path in Task 6) |
 | `deedpoll_gazette_notice_batch_case` (V31), `deedpoll_gazette_request_case`, `deedpoll_gazette_reservation` (V34) | restrict | Gazette file values | **refuse**: any membership or request evidence keeps the case (existing guard) |
+| `deedpoll_document_deletion_request`, `deedpoll_document_deletion_step` (V51) | cascade (steps from their request) | the reason and confirmed name, held only until `Completed` | **refuse** while one is not `Completed` (`DOCUMENT_DELETION_UNRESOLVED`); a `Completed` receipt holds no reason, name or locator, and cascades |
 | `deedpoll_audit_event` (V36) | none (`case_id`) | none by design | **keep** (7 years); new `CASE_DELETED` with the original actor and reason |
 | `deedpoll_audit_event_value` (V36) | via event `case_id` | before/after values | dispose by `deedpoll_audit_dispose_case_values(case_id)` |
 | `deedpoll_master_email` (V44–V46) | none (`referral_ids uuid[]`, shared across cases) | none (ids only) | keep the row; a `Pending` row re-reads its referrals at send time and skips those no longer `Claimed`, so a deleted referral drops out; never delete another case's email |
@@ -229,6 +230,7 @@ refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal`
 | `GAZETTE_EVIDENCE` | Gazette notice batch membership or request evidence |
 | `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS` | the existing retained-bytes guards |
 | `DOCUMENT_STORAGE_UNRESOLVED` | a document `UploadPending`, `Uploaded`, `AttachUncertain`, or `UploadUncertain` with a send left |
+| `DOCUMENT_DELETION_UNRESOLVED` | a member of staff's permanent document deletion (V51, `docs/DOCUMENT-DELETION.md`) is `InProgress` or `NeedsAttention` (*Permanently deleted documents*, below) |
 | `CCD_CREATION_UNRESOLVED` | an attempt is `Claimed`/`AwaitingConfirmation` (linked or not: the binding commits before the attempt reads `Linked`), or an unlinked case's attempt may have reached CCD without proof nothing was created |
 | `EMAIL_SEND_UNRESOLVED` | a `Pending` email with its send started, or under a live claim |
 | `KEY_REUSED`, `CONFLICTING_REASON` | a replay: the same key with another body, or another key with the other reason |
@@ -430,7 +432,9 @@ external line is `Done`, in **one owned transaction** (the claim's lock is held 
    `ccd.case_data` row for the reference (else `CCD_COPY_PRESENT`: the CCD step can only be `Done` through the SDK's
    own delete, so a copy still there means a hand edit or a bug).
 2. Locks the case `FOR UPDATE` and refuses retained deed or staged bytes (`RETAINED_PAYLOAD`; admission refused them
-   and V49 refuses new ones, but it is asked, not assumed).
+   and V49 refuses new ones, but it is asked, not assumed), and a permanent document deletion that has not completed
+   (`DOCUMENT_DELETION_UNRESOLVED`; admission refused it and the fence refuses a new one, but the cascade would take
+   its request and steps, so it is asked too).
 3. Deletes each listed owned stage (V29 guards only `UPDATE`) and records its line `DELETED` or `ALREADY_ABSENT`; an
    owned stage naming the case that the inventory did not list is `UNLISTED_OWNED_STAGE`.
 4. Deletes the case row; notes, witnesses, documents, referrals, notifications, CCD creation attempts and the deed
@@ -573,7 +577,7 @@ an auth failure or an ambiguous answer is never read as absence. What an operato
 | `NeedsAttention` `CCD_CASE_MISSING`, `CDAM_WITHOUT_CCD_CASE`, `CCD_COPY_PRESENT` | The SDK's copy and the request's inventory disagree | Establish from data-store whether the CCD case exists; escalate before any action |
 | `NeedsAttention` `RETAINED_PAYLOAD`, `LOCAL_FINALISATION_REFUSED` | Finalisation was refused and rolled back, external steps kept `Done` | Resolve the named obstacle, then requeue; finalisation resumes without repeating a removal |
 | `NeedsAttention` `CDAM_REMOVED_DOCUMENT_UNPURGED` | CCD has disposed of the case, but documents a caseworker removed while they were in CDAM are still soft-deleted in dm-store | Ask the dm-store team to purge the listed CDAM ids; once they confirm in writing, run [`docs/deletion/confirm-cdam-purge.sql`](deletion/confirm-cdam-purge.sql) (*Removed CDAM documents*) |
-| `NeedsAttention` `UNLISTED_OWNED_STAGE`, `CLEANUP_STEP_FAILED` | Something reached the case that the fence or the inventory did not account for, or a line failed for a reason the worker does not retry | Escalate to the service team; not requeueable by the standard statement |
+| `NeedsAttention` `UNLISTED_OWNED_STAGE`, `CLEANUP_STEP_FAILED`, `DOCUMENT_DELETION_UNRESOLVED` | Something reached the case that the fence or the inventory did not account for, or a line failed for a reason the worker does not retry | Escalate to the service team; not requeueable by the standard statement |
 
 **Requeueing** is a reviewed operator statement, not an endpoint: there is deliberately no browser retry. The
 statement is [`docs/deletion/requeue.sql`](deletion/requeue.sql), one atomic statement run with psql's
@@ -832,6 +836,31 @@ case's other children are. Admission inventories each one:
   named; otherwise it writes nothing and answers `0, 0, 0`, so a missing id, an extra id, a second run or a request in
   another state changes nothing. `DeletionCleanupTest` runs that file verbatim for each of those. The standard
   requeue leaves this code alone.
+
+## Permanently deleted documents
+
+Since V51 a member of staff can permanently delete one document (`docs/DOCUMENT-DELETION.md`). Its request is the
+document's fence, and its completion deletes the row, confirms every remote step (the CCD reference and the CDAM
+binary or the file), writes `DOCUMENT_DELETED` and the case note, and clears the request's reason, name and locators.
+It writes **no** V50 tombstone: the completed request is the receipt. Application deletion meets it in three places:
+
+- **Admission** refuses `DOCUMENT_DELETION_UNRESOLVED` while any of the case's document requests is `InProgress` or
+  `NeedsAttention`, in its own statement under the case's `FOR UPDATE` lock. Document deletion's admission takes the
+  same lock and then refuses an application request (`APPLICATION_DELETION_PENDING`; V51 repeats it at commit through
+  V49's fence function), so whichever commits first wins and neither inventories the other's half-done work. A
+  document whose bytes may or may not be gone is never listed as a `LOCAL_DOCUMENT` or `CDAM_DOCUMENT`, and its
+  request, steps and fenced row are never cascaded away from under the document's recovery sweep. A `NeedsAttention`
+  document request must be resolved through document deletion's own runbook first.
+- **Inventory** lists nothing for a completed one: there is no row and no tombstone. If a tombstone and a receipt ever
+  named one id, the receipt wins and no `CDAM_REMOVED_DOCUMENT` line is written, so a verified permanent deletion is
+  never sent to the manual purge. Historical V50 tombstones keep the conservative handling above, unchanged: a CDAM
+  one still holds its request at `CDAM_REMOVED_DOCUMENT_UNPURGED`, because a soft delete is no proof of purge.
+- **Finalisation** asks again under the case lock (`DOCUMENT_DELETION_UNRESOLVED`, an escalation) and otherwise
+  cascades the completed receipts with the case; the `DOCUMENT_DELETED` events stay with the rest of the audit
+  trail. **Restore** deletes only the application's request, so a document permanently deleted before that
+  request stays deleted, its receipt and note intact; after a restore, document deletion is admitted again.
+
+The grace period is not shared: a permanent document deletion has none and no restore.
 
 ## The stale check's window
 

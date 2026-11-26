@@ -101,6 +101,32 @@ public class DeletionAdmissionRepository {
             """, Boolean.class, caseId, Timestamp.valueOf(now)));
     }
 
+    /**
+     * Whether a permanent document deletion on the case (V51) is admitted and not {@code Completed}: still
+     * {@code InProgress} or {@code NeedsAttention}. Read under the case's {@code FOR UPDATE} lock, which document
+     * deletion admission also takes, so a request either committed first and is seen here or meets this request's
+     * fence. Its document is fenced from every JPA read but still listed by {@link #documents}, and its bytes may or
+     * may not be gone, so the application waits for it rather than inventorying a document in that state.
+     */
+    public boolean hasUnresolvedDocumentDeletion(String caseId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM deedpoll_document_deletion_request
+                            WHERE case_id = ? AND status <> 'Completed')
+            """, Boolean.class, caseId));
+    }
+
+    /**
+     * The documents of the case whose permanent deletion completed (V51's receipts), by id. Completion deleted each
+     * one's row and confirmed every remote step, binary included, so none needs cleaning up again, and none is a
+     * caseworker's soft removal waiting for the dm-store team's purge.
+     */
+    public List<String> permanentlyDeletedDocuments(String caseId) {
+        return jdbc.queryForList("""
+            SELECT document_id FROM deedpoll_document_deletion_request
+             WHERE case_id = ? AND status = 'Completed' ORDER BY document_id
+            """, String.class, caseId);
+    }
+
     /** Every supporting document on the case, by id. */
     public List<DocumentLocation> documents(String caseId) {
         return jdbc.query("""

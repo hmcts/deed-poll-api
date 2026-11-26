@@ -25,6 +25,13 @@ public enum DeletionRefusal {
     /** A supporting document's remote upload or attach is in flight or uncertain. */
     DOCUMENT_STORAGE_UNRESOLVED("A document on this application has an upload that is not yet settled. "
         + "Resolve it before deleting the application."),
+    /**
+     * A member of staff's permanent deletion of one of the application's documents has been admitted and has not
+     * completed: it is still being carried out, or it needs attention. Its request, steps and fenced document would
+     * otherwise be cascaded away with the case before anybody knew whether the document's bytes were gone.
+     */
+    DOCUMENT_DELETION_UNRESOLVED("A document on this application is being permanently deleted and that deletion has "
+        + "not finished. Try again once it has finished, or once it has been resolved if it needs attention."),
     /** The case's CCD creation is in flight, or an unlinked case's may have reached CCD unproven. */
     CCD_CREATION_UNRESOLVED("This application's CCD case creation has not finished or needs repair. "
         + "Resolve it before deleting the application."),

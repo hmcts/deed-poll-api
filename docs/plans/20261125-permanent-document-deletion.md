@@ -277,11 +277,11 @@ NoteService/DocumentUploadAudit adapters, scheduler/config and their tests.
 **Files:** RemovedDocumentRepository, application admission/inventory/finalisation, request/step repositories,
 new migrations as needed and existing application deletion/grace/restore/concurrency tests.
 
-- [ ] Refuse application admission while a document request/use outcome is unresolved under the shared lock
+- [x] Refuse application admission while a document request/use outcome is unresolved under the shared lock
   order; prevent cascades or restore from invalidating work and never resurrect a permanently deleted document.
-- [ ] Recognise new verified permanent receipts without weakening the existing historical soft-delete purge
+- [x] Recognise new verified permanent receipts without weakening the existing historical soft-delete purge
   refusal. Retain cleanup evidence and remove unnecessary locators only when safe.
-- [ ] Test complete/partial/unknown document deletion then application delete, historical soft-removal tombstones,
+- [x] Test complete/partial/unknown document deletion then application delete, historical soft-removal tombstones,
   application fence/restore, mixed filesystem/CDAM history, and both operations racing. Grace-period rules remain intact.
 
 ### Task 6: Publish the staff HTTP operations
@@ -362,6 +362,20 @@ changed, so no chart bump. Tests: `DocumentDeletionWorkTest` (18, Postgres), `Cd
 `PermanentDocumentRemovalTest` (4), `DocumentDeletionPropertiesTest` (6), `DocumentDeletionRecoveryTimerTest` (3), two chart
 conformance tests. Gates: build green (test 5798, 0 failed, 1 skipped; integration 31, 0 failed), Checkstyle OK, diff
 check clean.
+Task 5 (2026-11-26): application admission refuses the new `DeletionRefusal.DOCUMENT_DELETION_UNRESOLVED` while a
+document request is `InProgress` or `NeedsAttention` (`DeletionAdmissionRepository.hasUnresolvedDocumentDeletion`,
+under the shared case `FOR UPDATE` lock); finalisation asks again under its case lock (`DeletionFailure.
+DOCUMENT_DELETION_UNRESOLVED`, an escalation), so its cascade only ever takes `Completed` receipts. Inventory skips a
+tombstone whose id has a `Completed` receipt (`permanentlyDeletedDocuments`); historical V50 tombstones are unchanged.
+No migration was needed: the receipt holds no reason or locator and cascades with the case. Restore leaves a
+permanently deleted document deleted. Docs: `APPLICATION-DELETION.md` *Permanently deleted documents* (plus the
+refusal, finalisation and recovery tables, and `requeue.sql`'s comment), `DOCUMENT-DELETION.md` *Application
+deletion*. The CLAUDE.md "a new path that deletes a document row must write one [tombstone]" sentence is left for
+Task 7's CLAUDE.md rewrite. Tests: `DocumentDeletionApplicationDeletionTest` (8, Postgres: InProgress, partly done and
+NeedsAttention refusals; completed CDAM and metadata-only receipts with mixed live/tombstone history; a receipt
+overriding a tombstone; fence and restore; both admissions racing in each order, stable over three reruns) and
+`DeletionFinalisationTest.unresolvedDocumentDeletionRefuses`. Gates: build green (test 5807, 0 failed, 1 skipped;
+integration 31, 0 failed), Checkstyle OK, diff check clean.
 Previously: this plan had been checked structurally, not executed. Record source SHAs, contract proof, migrations,
 task validation, spec artifact, review findings and outstanding deployment evidence here. Keep checkboxes inside tasks.
 

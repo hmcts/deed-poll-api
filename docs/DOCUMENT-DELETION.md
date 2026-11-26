@@ -225,8 +225,8 @@ documents of the same case stay usable.
   `findCcdDocumentProjections` (the CCD view), `findByDeedPollIdOrderByCreatedOnAsc` (email history and compose),
   `DeedDocumentService.existingDeed` and the storage moves' `findByIdAndDeedPollIdForUpdate`.
 - **Native statements that read documents:** only `DeletionAdmissionRepository.documents` and
-  `hasUnresolvedDocumentStorage`. They must keep seeing a fenced document, because application deletion has to
-  inventory it (Task 5). Recovery and finalisation read their own request table natively, so they never need the
+  `hasUnresolvedDocumentStorage`. They keep seeing a fenced document; application admission never inventories one,
+  because it refuses first while the document's request is unresolved (*Application deletion*, below). Recovery and finalisation read their own request table natively, so they never need the
   entity.
 - **Ask after the lock:** writers that take the case lock and then ask (`DeletionFence.admits`, `lockUnfenced…`) also
   ask whether the document they are about to use is fenced: `CaseEmailService` before enqueuing a deed id,
@@ -440,6 +440,22 @@ request as it then stands. There is still no HTTP route (Task 6).
   Alongside it: `CdamPermanentDeleteTest` (WireMock: 204, 404, 403, 401, 400, 408/429/5xx, read timeout, reset, no
   tokens, unreachable), `PermanentDocumentRemovalTest`, `DocumentDeletionPropertiesTest`,
   `DocumentDeletionRecoveryTimerTest`, and the chart conformance tests.
+
+## Application deletion (Task 5)
+
+`docs/APPLICATION-DELETION.md`, *Permanently deleted documents*, is the application's side. In short:
+
+- Application admission refuses `DOCUMENT_DELETION_UNRESOLVED` while any of the case's document requests is
+  `InProgress` or `NeedsAttention` (`DeletionAdmissionRepository.hasUnresolvedDocumentDeletion`), under the same
+  case `FOR UPDATE` lock this admission takes. Whichever admission commits first wins: the other is refused
+  (`APPLICATION_DELETION_PENDING` here, `DOCUMENT_DELETION_UNRESOLVED` there). Application finalisation asks again
+  under its case lock (`DeletionFailure.DOCUMENT_DELETION_UNRESOLVED`), so its cascade can only ever take `Completed`
+  receipts, never a live request, its steps, its lease or its fenced row.
+- A completed request has no row and no V50 tombstone, so the application lists nothing for it. Application inventory
+  also skips any tombstone whose id has a `Completed` receipt (`permanentlyDeletedDocuments`), so a verified permanent
+  deletion is never sent to `CDAM_REMOVED_DOCUMENT_UNPURGED`; historical soft removals are still sent there.
+- The receipt holds no reason, name or locator once `Completed`, so cascading it with the case loses nothing the audit
+  does not keep. A restored application keeps its permanently deleted documents deleted.
 
 ## Contract alignment with the plan
 

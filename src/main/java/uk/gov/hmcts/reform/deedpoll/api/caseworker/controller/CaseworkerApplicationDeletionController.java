@@ -124,7 +124,8 @@ public class CaseworkerApplicationDeletionController {
     @ApiResponse(responseCode = "415", description = "The body is not application/json. Nothing is written.")
     @ApiResponse(responseCode = "409", description = "Refused, with a code and fixed words, and nothing written: "
         + "STALE_CONFIRMATION (review the application again), RETAINED_PERMANENTLY, GAZETTE_EVIDENCE, "
-        + "RETAINED_DEED_PAYLOAD, RETAINED_STAGED_UPLOADS, DOCUMENT_STORAGE_UNRESOLVED, CCD_CREATION_UNRESOLVED, "
+        + "RETAINED_DEED_PAYLOAD, RETAINED_STAGED_UPLOADS, DOCUMENT_STORAGE_UNRESOLVED, "
+        + "DOCUMENT_DELETION_UNRESOLVED (a document's permanent deletion has not completed), CCD_CREATION_UNRESOLVED, "
         + "EMAIL_SEND_UNRESOLVED (try again once it settles), KEY_REUSED or CONFLICTING_REASON.",
         content = @Content(schema = @Schema(implementation = DeletionError.class)))
     @AuditedAs(AuditAction.CASE_DELETION_REQUESTED)
