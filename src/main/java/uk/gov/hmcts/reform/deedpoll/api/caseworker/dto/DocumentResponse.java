@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 
@@ -29,6 +30,8 @@ import java.util.List;
  * @param hasFile whether a file is actually attached, so a caller links only when there is something to fetch
  * @param createdOn when the document was added
  * @param modifiedOn when its metadata was last changed
+ * @param documentVersion the document's reviewed version (V51), which a deletion request sends back as
+ *     {@code expectedDocumentVersion}; it moves whenever the document's metadata, file or storage changes
  */
 public record DocumentResponse(
     String id,
@@ -40,7 +43,15 @@ public record DocumentResponse(
     Integer sizeBytes,
     boolean hasFile,
     LocalDateTime createdOn,
-    LocalDateTime modifiedOn) {
+    LocalDateTime modifiedOn,
+    @Schema(description = DOCUMENT_VERSION, minimum = "1") long documentVersion) {
+
+    /**
+     * The published meaning of {@code documentVersion}.
+     */
+    public static final String DOCUMENT_VERSION = "The document's version as reviewed. Send it back as "
+        + "expectedDocumentVersion when deleting the document: it moves whenever the document's metadata, file or "
+        + "storage changes, and a deletion against an older one is 409 DOCUMENT_CHANGED.";
 
     /** One stored document as the response carries it. */
     public static DocumentResponse from(DeedPollSupportingDocument document) {
@@ -57,7 +68,8 @@ public record DocumentResponse(
             document.getSizeBytes(),
             document.getStorageKey() != null && !document.getStorageKey().isBlank(),
             document.getCreatedOn(),
-            document.getModifiedOn());
+            document.getModifiedOn(),
+            document.getVersion());
     }
 
     /** A case's documents, preserving the order the domain fetched them in. */

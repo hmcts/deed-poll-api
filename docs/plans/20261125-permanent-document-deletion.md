@@ -289,11 +289,11 @@ new migrations as needed and existing application deletion/grace/restore/concurr
 **Files:** caseworker document controller/DTOs, status service,
 WriteEndpointAuditCoverageTest, security/OpenAPI tests and publisher test.
 
-- [ ] Implement the admission (200/202) and status routes, bounded closed JSON/key/version validation, typed
+- [x] Implement the admission (200/202) and status routes, bounded closed JSON/key/version validation, typed
   conflicts, no-store headers and audit classification; no reason or locator in the status.
-- [ ] Test all permitted staff roles and refusals for a judge, unauthenticated, citizen and service-only callers,
+- [x] Test all permitted staff roles and refusals for a judge, unauthenticated, citizen and service-only callers,
   cross-case/referral guesses, lost-response replay after row removal and access revocation. Scope/auth precedes replay.
-- [ ] Publish the complete spec and record SHA/hash/full delta, including documentVersion in the staff document
+- [x] Publish the complete spec and record SHA/hash/full delta, including documentVersion in the staff document
   projection (the judicial projection gains nothing). Ensure no note-author/audit identity is accepted
   from the client.
 
@@ -376,6 +376,25 @@ NeedsAttention refusals; completed CDAM and metadata-only receipts with mixed li
 overriding a tombstone; fence and restore; both admissions racing in each order, stable over three reruns) and
 `DeletionFinalisationTest.unresolvedDocumentDeletionRefuses`. Gates: build green (test 5807, 0 failed, 1 skipped;
 integration 31, 0 failed), Checkstyle OK, diff check clean.
+Task 6 (2026-11-26): `CaseworkerDocumentDeletionController` publishes `requestDocumentDeletion` (POST
+`/caseworker/cases/{id}/documents/{documentId}/deletion-requests`, `@AuditedAs(DOCUMENT_DELETION_REQUESTED)`; 200
+`Completed`, else 202 with the status `Location`) and `getDocumentDeletion` (GET
+`/caseworker/cases/{id}/document-deletions/{requestId}`: requestId, documentId, status, requestedAt, completedAt,
+failure; no reason, name, requester or locator), both `no-store`. The body is closed (`DocumentDeletionBodies`: reason
+a JSON string, version a JSON integer), bounded at 16 KB through `api/BoundedJsonBodies` (application deletion's reader,
+extracted and shared), 415 for forms or non-JSON; 409s carry `DocumentDeletionError {error, code}`. `DocumentResponse`
+gains `documentVersion`; `JudicialDocument` does not. Recorded deltas: access is the `/caseworker/**` chain plus the
+service's role check (no new capability), so the controller reads the body before the service, unlike application
+deletion's capability-first order; a malformed status id is the service's 404 after its case check; the
+`requestId`-publishing ArchUnit exemption in `NotificationSecurityTest` (and CLAUDE.md's sentence) now names the two
+document deletion DTOs. Spec: base (HEAD `5ecc056`) sha256 `8be45c77…4a62`, new sha256 `48dc8026…c2ee`; full delta:
+paths added are the two above, schemas added are `CreateDocumentDeletionRequest`, `DocumentDeletionAdmissionResponse`,
+`DocumentDeletionError` and `DocumentDeletionRequestResponse`, `DocumentResponse` gains `documentVersion`, and nothing
+else changed. Tests: `CaseworkerDocumentDeletionControllerTest` (15, full context and Postgres: every staff role, judge,
+other-service, citizen, S2S-only and unauthenticated callers, validation, 413/415, `DOCUMENT_CHANGED`, cross-case 404s,
+replay by a second user after the row is gone, access revocation, 202 `InProgress`/`NeedsAttention`, reason never
+logged), `OpenAPIPublisherTest.documentsTheDocumentDeletion`, `WriteEndpointAuditCoverageTest` now 39/35/4. Gates:
+build green (test 5822, 0 failed, 1 skipped; integration 32, 0 failed), Checkstyle OK, diff check clean.
 Previously: this plan had been checked structurally, not executed. Record source SHAs, contract proof, migrations,
 task validation, spec artifact, review findings and outstanding deployment evidence here. Keep checkboxes inside tasks.
 

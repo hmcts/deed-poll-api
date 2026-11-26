@@ -83,6 +83,7 @@ public class DocumentDeletionService {
     private static final int SETTLED_UPLOAD_ATTEMPTS = 2;
 
     private static final String NO_SUCH_CASE = "DeedPoll not found";
+    private static final String NO_SUCH_REQUEST = "Document deletion request not found";
 
     private final DocumentDeletionRequestRepository requests;
     private final DocumentDeletionAdmissionRepository documents;
@@ -203,16 +204,16 @@ public class DocumentDeletionService {
      *
      * @throws uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError unless the caller holds a staff role, before the id is
      *     looked up
-     * @throws NotFoundError for an unknown or fenced case, or a request of another case
+     * @throws NotFoundError for an unknown or fenced case, or a null, unknown or other case's request
      */
     @Transactional(readOnly = true)
     public DocumentDeletionRequest read(CurrentUser caller, String caseId, UUID requestId) {
         caller.requireAnyRole(STAFF);
-        if (caseId == null || requestId == null || deedPolls.findById(caseId).isEmpty()) {
+        if (caseId == null || deedPolls.findById(caseId).isEmpty()) {
             throw new NotFoundError(NO_SUCH_CASE);
         }
-        return requests.findByCaseAndId(caseId, requestId)
-            .orElseThrow(() -> new NotFoundError("Document deletion request not found"));
+        return Optional.ofNullable(requestId).flatMap(id -> requests.findByCaseAndId(caseId, id))
+            .orElseThrow(() -> new NotFoundError(NO_SUCH_REQUEST));
     }
 
     /**

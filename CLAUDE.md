@@ -43,6 +43,9 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   plus POST /caseworker/cases/{id}/deletion-requests, GET
                                   /caseworker/application-deletions/{requestId} and POST …/{requestId}/restore
                                   (DELETE_APPLICATION, Delivery Manager only; counted apart as DELETION_PATHS)
+                                  plus POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests and GET
+                                  /caseworker/cases/{id}/document-deletions/{requestId} (any staff role, no judicial
+                                  route; counted apart as DOCUMENT_DELETION_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
                                   plus its own document preview (counted apart with the caseworker one)
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain
@@ -726,8 +729,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `MissingRequestHeaderException` and not its parent. (The application deletion POST also takes an `Idempotency-Key`,
   bound optional and refused in the body's own words; see `docs/APPLICATION-DELETION.md`.) The id is published
   nowhere — no DTO, no note, no log line — asserted by an ArchUnit `noFields()` rule plus its counterpart that the
-  column does exist on the entity; the rule exempts exactly `DeletionAdmissionResponse` and `DeletionRequestResponse`,
-  whose `requestId` is the deletion request's own resource id, not an email's key. Every
+  column does exist on the entity; the rule exempts exactly `DeletionAdmissionResponse`, `DeletionRequestResponse`,
+  `DocumentDeletionAdmissionResponse` and `DocumentDeletionRequestResponse`, whose `requestId` is the application or
+  document deletion request's own resource id, not an email's key. Every
   lookup is case-scoped (`findByDeedPollIdAndRequestId`): widening it to the request id alone would answer one
   caller with another case's receipt.
 - **A new email template is declared in a handful of places, and two of them fail silently.** The `EmailTemplate`

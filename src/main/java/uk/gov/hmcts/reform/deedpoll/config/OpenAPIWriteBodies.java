@@ -26,6 +26,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionNote;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionReason;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionReason;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.deletion.DocumentDeletionService;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteSettingsService;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
@@ -162,6 +164,7 @@ public class OpenAPIWriteBodies {
             describeMasterBodies(openApi);
             describeBankHolidayBody(openApi);
             describeDeletionBody(openApi);
+            describeDocumentDeletionBody(openApi);
         };
     }
 
@@ -322,6 +325,43 @@ public class OpenAPIWriteBodies {
             : openApi.getPaths().get("/caseworker/cases/{id}/deletion-requests");
         if (path != null && path.getPost() != null && path.getPost().getRequestBody() != null) {
             // Bound optional so a missing body is refused after the capability check, not before it.
+            path.getPost().getRequestBody().setRequired(true);
+        }
+    }
+
+    /**
+     * The document deletion request's closed body (plan 20261125-permanent-document-deletion): the bounds are
+     * {@code DocumentDeletionReason}'s, so the document says what the service enforces.
+     */
+    private void describeDocumentDeletionBody(OpenAPI openApi) {
+        Schema<?> body = schema(openApi, "CreateDocumentDeletionRequest");
+        if (body == null) {
+            return;
+        }
+        body.setType("object");
+        body.setProperties(null);
+        body.addProperty(DocumentDeletionReason.FIELD, new StringSchema().minLength(1)
+            .maxLength(DocumentDeletionReason.MAX_LENGTH)
+            .description("Why the document is being deleted, in the staff member's own words, for example "
+                + "\"Uploaded in error\". Outer whitespace is trimmed first, then 1 to "
+                + DocumentDeletionReason.MAX_LENGTH + " characters, with no line breaks, tabs, control characters or"
+                + " bidirectional controls. Kept "
+                + "exactly as accepted in the audit trail and the case note, so it should say why and avoid "
+                + "unnecessary applicant personal details."));
+        IntegerSchema version = new IntegerSchema();
+        version.setFormat("int64");
+        version.setMinimum(java.math.BigDecimal.ONE);
+        version.setDescription("The document's documentVersion exactly as the case detail published it when the "
+            + "staff member reviewed it, as a JSON integer. A different version is 409 DOCUMENT_CHANGED on a first "
+            + "request; a replay is never compared with the document.");
+        body.addProperty(DocumentDeletionService.EXPECTED_DOCUMENT_VERSION_FIELD, version);
+        body.setRequired(java.util.List.of(DocumentDeletionReason.FIELD,
+                                           DocumentDeletionService.EXPECTED_DOCUMENT_VERSION_FIELD));
+        body.setAdditionalProperties(false);
+        body.setDescription("A permanent deletion of the document in the path. No other key is accepted.");
+        PathItem path = openApi.getPaths() == null ? null
+            : openApi.getPaths().get("/caseworker/cases/{id}/documents/{documentId}/deletion-requests");
+        if (path != null && path.getPost() != null && path.getPost().getRequestBody() != null) {
             path.getPost().getRequestBody().setRequired(true);
         }
     }
