@@ -292,7 +292,7 @@ content version's blob, and audits `HARD_DELETED`.
 | Answer | Meaning | Request outcome |
 |---|---|---|
 | `204` | dm-store accepted and recorded the hard delete | step `Done`; **the only receipt** |
-| `404` | CDAM's metadata read found nothing: already hard-deleted (perhaps our own lost 204), **or soft-deleted by somebody else with the blob kept**, or never there. Indistinguishable (proved by the contract test) | `NeedsAttention` `CDAM_PURGE_UNPROVEN`; an operator confirms with the dm-store team that the document is `hardDeleted`, as application deletion's `confirm-cdam-purge.sql` does. Never `Completed` on a 404 |
+| `404` | CDAM's metadata read found nothing: already hard-deleted (perhaps our own lost 204), **or soft-deleted by somebody else with the blob kept**, or never there. Indistinguishable (proved by the contract test) | `NeedsAttention` `CDAM_PURGE_UNPROVEN`; the request stays visibly unresolved; an operator may ask the dm-store team whether the document is `hardDeleted`, but no reviewed route yet settles the request (*There is no supported resolution route yet*, below). Never `Completed` on a 404 |
 | `401` | S2S rejected | retry (bounded), then `NeedsAttention` |
 | `403` | CDAM's service permission (`deed_poll_api` lacks `UPDATE` on the document's case type) | `NeedsAttention` `CDAM_PERMISSION`; an activation blocker, not a retry |
 | `400` | bad id (cannot happen for a stored UUID) | `NeedsAttention` |

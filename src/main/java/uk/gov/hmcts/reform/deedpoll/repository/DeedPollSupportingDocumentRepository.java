@@ -78,16 +78,31 @@ public interface DeedPollSupportingDocumentRepository extends JpaRepository<Deed
     boolean hasDocumentDeletionRequest(@Param("id") String id);
 
     /**
-     * {@link #findByIdAndDeedPollIdForUpdate}, then the document deletion fence in a statement of its own. A locking
-     * read that waited for admission's document lock re-checks only the row it waited for, in the snapshot it took
-     * before waiting, so the entity restriction's {@code NOT EXISTS} still sees no request; the fresh statement after
-     * the lock does (plan 20261125-permanent-document-deletion, Task 3). Every writer that locks a document without
-     * first holding its case's lock asks through here; V51's deferred trigger is the backstop for one that does not.
+     * Takes the case row {@code FOR KEY SHARE} for the rest of the transaction, as
+     * {@code DeletionFenceRepository.shareCase} does: the lock every document writer reaches anyway at commit (V49's
+     * and V51's deferred triggers, a tombstone's foreign key), taken first instead.
+     *
+     * @return the case id if the case exists
+     */
+    @Query(value = "SELECT id FROM deedpoll_deedpoll WHERE id = :deedPollId FOR KEY SHARE", nativeQuery = true)
+    List<String> shareCaseForDocumentWrite(@Param("deedPollId") String deedPollId);
+
+    /**
+     * The case {@code FOR KEY SHARE}, then {@link #findByIdAndDeedPollIdForUpdate}, then the document deletion fence
+     * in a statement of its own. The case comes first because document deletion admission locks the case
+     * {@code FOR UPDATE} and then the document: a writer holding the document that meets the case only at commit
+     * would deadlock with it. A locking read that waited for admission's document lock re-checks only the row it
+     * waited for, in the snapshot it took before waiting, so the entity restriction's {@code NOT EXISTS} still sees no
+     * request; the fresh statement after the lock does (plan 20261125-permanent-document-deletion, Task 3). Every
+     * writer that locks a document asks through here; V51's deferred trigger is the backstop for one that does not.
      *
      * @return the locked document, or empty if there is none or a document deletion request names it
      */
     default Optional<DeedPollSupportingDocument> findUnfencedByIdAndDeedPollIdForUpdate(String id,
                                                                                        String deedPollId) {
+        if (shareCaseForDocumentWrite(deedPollId).isEmpty()) {
+            return Optional.empty();
+        }
         return findByIdAndDeedPollIdForUpdate(id, deedPollId)
             .filter(found -> !hasDocumentDeletionRequest(found.getId()));
     }

@@ -588,6 +588,39 @@ class DocumentDeletionServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a patch holding the document when admission starts: admission waits for it, never a deadlock")
+    void patchHoldingTheDocumentBeforeAdmission() throws Exception {
+        String caseId = fixture();
+        String documentId = document(caseId, "Local", "files/" + UUID.randomUUID(), null, 0);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch patched = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            // The production patch, held open: it locks the document, and its commit meets the case (V49's trigger).
+            final Future<?> writer = pool.submit(() -> transaction().executeWithoutResult(status -> {
+                documentService.updateDocument(caseId, documentId, rename("Replaced"));
+                patched.countDown();
+                await(release);
+            }));
+            assertThat(patched.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+            final Future<Object> admission = pool.submit(() -> outcome(() -> admit(caseId, documentId,
+                                                                               UUID.randomUUID())));
+            awaitLockWaiters(1);
+            release.countDown();
+            writer.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+            assertThat(admission.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isInstanceOfSatisfying(
+                DocumentDeletionConflictError.class,
+                refused -> assertThat(refused.refusal()).isEqualTo(DocumentDeletionRefusal.DOCUMENT_CHANGED));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("SELECT name FROM deedpoll_supportingdocument WHERE id = ?", String.class,
+                                       documentId)).isEqualTo("Replaced");
+        assertThat(requestCount(caseId)).isZero();
+    }
+
+    @Test
     @DisplayName("a storage-state move under way when admission starts: admission waits for it, never a deadlock")
     void storageMoveBeforeAdmission() throws Exception {
         String caseId = fixture();
