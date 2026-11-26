@@ -93,6 +93,10 @@ public class DocumentDeletionService {
     private final DocumentStore store;
     private final AuditTrail audit;
 
+    // Sonar's S9352 reads `store` as ambiguous between CdamDocumentStore and LocalFilesystemDocumentStore, but each is
+    // @ConditionalOnProperty on deedpoll.documents.store with a different value, so exactly one bean ever exists
+    // (as DocumentService's constructor says).
+    @SuppressWarnings("java:S9352")
     public DocumentDeletionService(DocumentDeletionRequestRepository requests,
                                    DocumentDeletionAdmissionRepository documents, DeletionAdmissionRepository cases,
                                    DeletionFenceRepository applicationFence, DeedPollRepository deedPolls,

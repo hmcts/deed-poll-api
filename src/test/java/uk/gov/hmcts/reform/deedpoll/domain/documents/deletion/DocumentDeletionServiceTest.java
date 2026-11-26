@@ -210,7 +210,7 @@ class DocumentDeletionServiceTest extends AbstractPostgresContainerTest {
     void validatesTheBody() {
         String caseId = fixture();
         String documentId = document(caseId, "Local", null, null, 0);
-        String unsafe = "Uploaded‮in error";
+        String unsafe = "Uploaded\u202Ein error";
 
         assertThatThrownBy(() -> deletions.request(CASEWORKER, caseId, documentId,
                                                    new DocumentDeletionCommand(null, unsafe, null)))

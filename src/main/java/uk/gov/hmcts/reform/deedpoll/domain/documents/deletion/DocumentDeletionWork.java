@@ -14,6 +14,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DocumentDeletionRequestRepository
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -328,7 +329,7 @@ public class DocumentDeletionWork {
 
     /** How long a call with this allowance may still wait before it starts; negative once it may not start. */
     private Duration timeLeft(LocalDateTime deadline, Duration allowance) {
-        return Duration.between(now().plus(allowance), deadline);
+        return Duration.between(now().plus(allowance).toInstant(ZoneOffset.UTC), deadline.toInstant(ZoneOffset.UTC));
     }
 
     private LocalDateTime now() {
