@@ -2,7 +2,8 @@
 
 ## Overview
 
-Status: planned, 2026-11-25. Planning only; implementation and live deletion have not started.
+Status: implemented on `plan/permanent-document-deletion`, 2026-11-26 (Tasks 1-7). Not deployed; the AAT rehearsal
+and the prod CDAM smoke are prepared, not run.
 
 Steve confirmed the outcome in this conversation:
 
@@ -301,18 +302,19 @@ WriteEndpointAuditCoverageTest, security/OpenAPI tests and publisher test.
 
 **Files:** changed sources/tests, README.md, CLAUDE.md, docs/DOCUMENT-DELETION.md, application deletion guidance, plan.
 
-- [ ] Run forced full build/integration/Checkstyle and changed-code coverage; record actual commands/results and
+- [x] Run forced full build/integration/Checkstyle and changed-code coverage; record actual commands/results and
   failure/race tests. Preserve current audit and Sonar gates; do not equate skipped checks with passed checks.
-- [ ] Document access, permanent outcome, reason/audit/note retention, active-use meaning and user wording,
+- [x] Document access, permanent outcome, reason/audit/note retention, active-use meaning and user wording,
   statuses, retry/investigation, metadata/backups limits, historical soft-removal handling and application interaction.
-- [ ] Rewrite CLAUDE.md's "Never send `permanent=true`" rule (and `docs/CDAM-RECOVERY.md`'s line): only document
+- [x] Rewrite CLAUDE.md's "Never send `permanent=true`" rule (and `docs/CDAM-RECOVERY.md`'s line): only document
   deletion sends it, directly (never after a soft delete), and only after its request is recorded, by Steve's
   decision of 2026-11-25; the internal `removeDocument`, upload clean-up and application deletion stay soft deletes.
-- [ ] Prepare the rehearsal: filesystem in AAT with a disposable fixture, and the **prod CDAM smoke** with a disposable
+- [x] Prepare the rehearsal: filesystem in AAT with a disposable fixture, and the **prod CDAM smoke** with a disposable
   application (a Delivery Manager creates a test application, uploads a test document, deletes it with a reason,
   confirms the note, audit and CDAM 404, then deletes the application with application deletion). CDAM already grants
   `deed_poll_api` `UPDATE` on `DEEDPOLL` (its `service_config.json`), which a permanent delete needs; dm-store has no
-  further gate. Prepare artifacts only; no live deletion or deployment in this plan run.
+  further gate. Prepare artifacts only; no live deletion or deployment in this plan run. (Artifacts prepared in
+  `docs/DOCUMENT-DELETION-SMOKE.md`; the rehearsal itself is not automatable here and was not run.)
 
 ## Success criteria
 
@@ -395,6 +397,17 @@ other-service, citizen, S2S-only and unauthenticated callers, validation, 413/41
 replay by a second user after the row is gone, access revocation, 202 `InProgress`/`NeedsAttention`, reason never
 logged), `OpenAPIPublisherTest.documentsTheDocumentDeletion`, `WriteEndpointAuditCoverageTest` now 39/35/4. Gates:
 build green (test 5822, 0 failed, 1 skipped; integration 32, 0 failed), Checkstyle OK, diff check clean.
+Task 7 (2026-11-26): forced gate `./gradlew build test --rerun integration --rerun jacocoTestReport -I
+…/no-checkstyle.gradle` at `7316940`: BUILD SUCCESSFUL in 4m 45s, test 5822 (0 failed, 0 errors, 1 skipped),
+integration 32 (0 failed), from the XML; Checkstyle OK; diff check clean. Changed-code line coverage (JaCoCo, lines
+added under `src/main/java` since `edb7052`): 744/794, 93.7%, over 51 files. Sonar and Jenkins' Checkstyle tasks were
+not run locally (Jenkins' gates, unchanged); `cftlibTest` was not run. Docs: `DOCUMENT-DELETION.md` gains *HTTP
+operations*, *Using it*, *Retention*, *Runbook* (inspection queries, per-code investigation) and the final evidence;
+new `DOCUMENT-DELETION-SMOKE.md` (AAT filesystem rehearsal, prod CDAM smoke, not run); README *Deleting a document*;
+CLAUDE.md's `permanent=true` rule rewritten (one sender, `CdamPermanentDelete`, after admission, never after a soft
+delete), a V51 fence bullet, the tombstone exception and the layout line; `CDAM-RECOVERY.md`, `CDAM-SMOKE.md` and
+`APPLICATION-DELETION.md` aligned. Finding recorded for follow-up: no reviewed route settles a `NeedsAttention`
+document request (it stays fenced and blocks application deletion); the runbook says so rather than improvising one.
 Previously: this plan had been checked structurally, not executed. Record source SHAs, contract proof, migrations,
 task validation, spec artifact, review findings and outstanding deployment evidence here. Keep checkboxes inside tasks.
 

@@ -66,6 +66,8 @@ domain/deletion                   the Delivery Manager's permanent application d
 domain/mi                         the management information figures (K1 to K4) from the case's dates, read
                                   by repository/ManagementInformationRepository's constant SQL — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
+domain/documents/deletion         staff permanent document deletion: admission, the in-request remote steps, the
+                                  recovery sweep and completion (DocumentDeletions, docs/DOCUMENT-DELETION.md) — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
                                   domain/documents must not depend on it (PreviewBoundaryTest)
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
@@ -207,8 +209,15 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   Log only fixed refusal categories, not names, bytes or parser diagnostics. See README for the exact limits.
 - **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or
   publish it. An uncertain upload gets exactly one fresh upload within the same request (two sends total), then
-  stays uncertain. There is no background retry or operator resume endpoint in 03a. Never send `permanent=true`:
-  caseworker cleanup is a soft delete, and only the dm-store team can arrange restoration.
+  stays uncertain. There is no background retry or operator resume endpoint in 03a.
+- **`permanent=true` has exactly one sender: staff document deletion** (Steve, 2026-11-25;
+  `docs/DOCUMENT-DELETION.md`). `storage/CdamPermanentDelete` sends it, only for a step of a document deletion request
+  whose admission has already committed, and **directly, never after a soft delete**: dm-store's lookup hides a
+  soft-deleted document, so a permanent delete after one never reaches the blob. Only its `204` is a receipt; a `404`
+  proves nothing and is `NeedsAttention` `CDAM_PURGE_UNPROVEN`, never `Completed`. Everything else stays a soft
+  delete: the internal `DocumentService.removeDocument`, upload clean-up and application deletion. Never send
+  `permanent=true` from any other path or as a retry of a soft delete; only the dm-store team can arrange restoration
+  of a soft-deleted document, and nobody can restore a permanently deleted one.
 - **CDAM ships off by default.** `CdamOnboarding` refuses unconfirmed CCD identifiers and local/default CDAM
   endpoints when CDAM is enabled; only `test`/`cftlib` against loopback permit placeholders. These are local test
   profiles, never deployment profiles. The configuration check cannot prove external onboarding or staff access.
@@ -294,7 +303,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   is `Done`: `DELETE` only, audit values through `deedpoll_audit_dispose_case_values`, one `CASE_DELETED` under the
   request's own Delivery Manager. A document removal leaves a V50 tombstone (`deedpoll_removed_document`) in its own
   transaction, so its best-effort unlink or CDAM soft delete is still inventoried; a new path that deletes a document
-  row must write one too. A removed CDAM document holds its request at `CDAM_REMOVED_DOCUMENT_UNPURGED` until the
+  row must write one too. The one exception is permanent document deletion: its `Completed` request is the evidence,
+  and application inventory skips a tombstone whose id has one (`permanentlyDeletedDocuments`). A removed CDAM document holds its request at `CDAM_REMOVED_DOCUMENT_UNPURGED` until the
   dm-store team purges it and an operator runs `docs/deletion/confirm-cdam-purge.sql`, which writes (and audits
   `DELETION_CDAM_PURGE_CONFIRMED`) only when the ids it is given are exactly the request's pending ones.
   **Nothing permanent happens before `restorable_until`**, which admission freezes as the request time plus the
@@ -308,6 +318,19 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   request `SKIP LOCKED`: the worker's finalisation locks request then case, and the window can close while a restore
   waits for the case, so a request somebody else holds is refused `CLEANUP_STARTED` and never waited for. It deletes the request, which lifts the fence, and records
   `CASE_DELETION_RESTORED` without the note. See `docs/APPLICATION-DELETION.md`.
+- **A document deletion request (V51) is a fence for one document, and it completes exactly once.**
+  `DeletionFenceSql.DOCUMENT_RESTRICTION` hides a named row from every JPA read, and V51's deferred trigger refuses at
+  commit an INSERT/UPDATE of it or an email naming it. A writer that locks a document asks after the lock
+  (`findUnfencedByIdAndDeedPollIdForUpdate`). Admission locks the case `FOR UPDATE`, then the document, and refuses
+  `DOCUMENT_CHANGED` (the row's trigger-maintained `version`), `DOCUMENT_STORAGE_UNRESOLVED`, `DOCUMENT_SHARED` and
+  `DOCUMENT_IN_USE`, whose sources are exactly a `Pending` email naming it under `EmailTemplate.documentKeys()`, an
+  unverified deed preparation and a `Promoting` stage; a new queued consumer of a document's bytes must be added there,
+  or deletion will race it. No lease and no lock around reads. Remote steps run outside any transaction, each outcome
+  in its own commit; only `DocumentDeletionCompletion` deletes the row, under case, document then request, with one
+  `DOCUMENT_DELETED` and one case note under the original requester. A receipt (`stepDone`) is kept whoever holds the
+  lease; never reset a step to `Pending` to unstick a request, because the second answer would be a 404 that proves
+  nothing. The recovery sweep is on by default and independent of application deletion's worker. The reason is never
+  logged or echoed. See `docs/DOCUMENT-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.

@@ -1,10 +1,11 @@
 # Permanent document deletion: ownership, use and deletion contracts
 
-Status: Task 1 of [the plan](plans/20261125-permanent-document-deletion.md), 2026-11-26. This records, against the
-code as it stands, who reads, queues, references and writes a supporting document, and specifies the contracts the
-later tasks implement: the lock order, the version token, the staff-only access matrix, the exact in-use sources, the
-request budget and per-call timeouts, binary ownership, CDAM's permanent-delete semantics and the fence points. Tasks 2-4
-add persistence, admission and cleanup (sections below); no HTTP route exists yet. Nothing here authorises deletion.
+Status: implemented on this branch (Tasks 1-7 of [the plan](plans/20261125-permanent-document-deletion.md),
+2026-11-26); not deployed and not rehearsed. This is the feature's contract and runbook. It records, against the
+code, who reads, queues, references and writes a supporting document, and the contracts the feature keeps: the lock
+order, the version token, the staff-only access matrix, the exact in-use sources, the request budget and per-call
+timeouts, binary ownership, CDAM's permanent-delete semantics and the fence points. *Using it*, *Runbook* and
+*Rehearsal* are for operators; [`DOCUMENT-DELETION-SMOKE.md`](DOCUMENT-DELETION-SMOKE.md) is the rehearsal script.
 
 ## At a glance
 
@@ -343,7 +344,7 @@ Run it with `./gradlew test --tests "uk.gov.hmcts.reform.deedpoll.storage.CdamPe
 ## Admission (Task 3)
 
 `domain/documents/deletion/DocumentDeletionService.request` admits, and `read` answers the status, both in the
-domain. There is no HTTP route yet (Task 6).
+domain; the HTTP routes are *HTTP operations* below.
 
 - **Order.** The staff role (`requireAnyRole` over `StaffArea.CASEWORKER`'s four roles, before anything is read), the
   subject, the body, then the case as the caller sees it (fenced by an application deletion: 404). Then the case
@@ -377,7 +378,7 @@ domain. There is no HTTP route yet (Task 6).
 
 `domain/documents/deletion/DocumentDeletions.delete` is the staff entry point. It refuses an active transaction,
 commits admission, then calls `DocumentDeletionWork.carryOut` on the same request within the budget, and answers the
-request as it then stands. There is still no HTTP route (Task 6).
+request as it then stands.
 
 - **Claims.** A pass claims the request under a fresh owner with a lease (`recovery.lease`, default 2 min, which must
   exceed the budget). The staff request claims its own request (`claim`). The sweep claims the soonest due one
@@ -456,6 +457,135 @@ request as it then stands. There is still no HTTP route (Task 6).
   deletion is never sent to `CDAM_REMOVED_DOCUMENT_UNPURGED`; historical soft removals are still sent there.
 - The receipt holds no reason, name or locator once `Completed`, so cascading it with the case loses nothing the audit
   does not keep. A restored application keeps its permanently deleted documents deleted.
+
+## HTTP operations (Task 6)
+
+`api/caseworker/controller/CaseworkerDocumentDeletionController`, counted apart as `DOCUMENT_DELETION_PATHS`, both
+`Cache-Control: no-store`:
+
+| Operation | Answers |
+|---|---|
+| `POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests`, `@AuditedAs(DOCUMENT_DELETION_REQUESTED)` | 200 `{requestId, status: "Completed"}`; 202 `{requestId, status}` (`InProgress`/`NeedsAttention`) with `Location`; 400 body/key/version/reason; 404 unknown, other case's or fenced document; 409 `DocumentDeletionError {error, code}`; 413 over 16 KB; 415 not JSON |
+| `GET /caseworker/cases/{id}/document-deletions/{requestId}` | 200 `{requestId, documentId, status, requestedAt, completedAt, failure}`, never the reason, the name, the requester or a locator; 404 unknown or another case's |
+
+The body is closed `{reason, expectedDocumentVersion}` (`DocumentDeletionBodies`): reason a JSON string, version a JSON
+integer, unknown keys refused without echo. `DocumentResponse` publishes `documentVersion`; `JudicialDocument` does not.
+The author is always the verified token's subject and name; nothing in the body names one.
+
+## Using it (user guidance for Admin)
+
+- **Who can.** Caseworkers, Team leaders and Delivery Managers (and the deprecated admin role), on any application
+  they can open. Masters cannot: their screens are read-only.
+- **What happens.** The document is removed from the application, from the CCD case's current documents and from
+  storage. It cannot be undone, and there is no restore, unlike a whole-application deletion.
+- **The reason.** Required, in the user's own words, up to 500 characters (for example "Uploaded in error"). Hint:
+  say why, and avoid unnecessary personal details of the applicant. It is kept in the audit trail for seven years and
+  in a case note that follows the case's own note rules.
+- **Confirmation.** Name the document and say the deletion cannot be undone. The page mints the `Idempotency-Key`
+  once and sends the version it showed.
+- **Refusals, in words.**
+  - `DOCUMENT_IN_USE`: exactly "This document is currently being used and cannot be deleted. Try again once the
+    operation has finished." It means an email waiting to go that carries the document, a deed still being prepared,
+    or a document still being moved into storage. A preview or download in progress does not count.
+  - `DOCUMENT_CHANGED`: the document changed since the page was shown; review it again.
+  - `DOCUMENT_STORAGE_UNRESOLVED`: the document's upload has not settled, or it is on a store this service cannot
+    reach; try later or ask for support.
+  - `DOCUMENT_SHARED`: another document uses the same file; ask for support.
+  - `APPLICATION_DELETION_PENDING`: the application itself is being deleted.
+  - `KEY_REUSED`: the page sent a different body under the same key; start again from the document list.
+- **Outcomes.** 200 `Completed` is done. 202 `InProgress` means the service is still finishing and will do so on its
+  own; the document is already hidden. 202 `NeedsAttention` means support has to look at it; the document stays
+  hidden and nothing is reported as deleted.
+- **What it does not reach.** A copy a person already downloaded or previewed, an email GOV.UK Notify has already
+  accepted (its download link lasts up to `notify.document-retention-weeks`), backups, earlier CCD event history and
+  search history, and dm-store's own record that the document existed (kept, marked `hardDeleted`).
+
+## Retention
+
+| Record | Holds | Kept |
+|---|---|---|
+| `DOCUMENT_DELETION_REQUESTED` audit event | requester, time, request id and reason in typed detail, no values | seven years (`deedpoll_audit_dispose_events_before`, not yet scheduled) |
+| `DOCUMENT_DELETED` audit event | the original requester, the time, request id, reason, `documentTypeId`, and the document's last values as audit values | the event seven years; its value rows are disposed with the case (`deedpoll_audit_dispose_case_values`), so the reason survives in the event detail |
+| The case note (`NOTE_CREATED` audited) | `Document <name> (<id>) permanently deleted. Reason: <reason>`, authored by the requester | as any note: today's edit/delete rules, disposed with the case |
+| `deedpoll_document_deletion_request` and steps | until `Completed`: the reason, the name and every unconfirmed locator; after: key, fingerprint, document id, requester, times | cascade with the case (application deletion) |
+
+## Runbook
+
+**Watch.** `deedpoll.documents.deletion.requests{status}`. Any `NeedsAttention` is a person's work. An `InProgress`
+count that does not fall means the sweep is off, or failing every pass. Log lines carry the request id, the step kind
+and a code, never a locator or the reason.
+
+**Inspect** (read-only; never select `reason` or `locator` into a ticket):
+
+```sql
+SELECT r.id, r.case_id, r.document_id, r.status, r.failure, r.attempts, r.requested_at, r.next_attempt_at,
+       r.lease_until IS NOT NULL AS claimed
+  FROM deedpoll_document_deletion_request r
+ WHERE r.status <> 'Completed'
+ ORDER BY r.requested_at;
+
+SELECT s.kind, s.state, s.outcome, s.attempts, s.completed_at
+  FROM deedpoll_document_deletion_step s
+ WHERE s.request_id = :request_id
+ ORDER BY s.kind;
+```
+
+**`InProgress`.** Nothing to do while the sweep runs (`DOCUMENT_DELETION_RECOVERY_ENABLED`, default true): it claims
+due requests every minute, resends only an unconfirmed step, and keeps every receipt. With it off, a request waits
+`InProgress` and is never reported `Completed`. Never clear `owner`/`lease_until` by hand; a lease expires on its own
+after `DOCUMENT_DELETION_RECOVERY_LEASE` (2 min).
+
+**`NeedsAttention`, by code.** The request is never claimed again, the document stays fenced, and an application
+deletion of the case is refused (`DOCUMENT_DELETION_UNRESOLVED`) until it is settled.
+
+| Code | Investigate | Do not |
+|---|---|---|
+| `CDAM_PURGE_UNPROVEN` | CDAM answered 404. Ask the dm-store team whether the document id (the `CDAM_BINARY` step's locator, passed to them on a restricted channel) is `hardDeleted`; it may be our own lost 204, or a soft delete by somebody else whose blob remains | treat the 404 as a purge; send a soft delete |
+| `CDAM_PERMISSION` | the deployed CDAM's `service_config.json` grants `deed_poll_api` `UPDATE` on `DEEDPOLL` (*Activation blockers*) | retry before the grant is deployed |
+| `CDAM_DELETE_FAILED` | CDAM's 400/401 or repeated unknown answers: S2S secret, CDAM health, the id | resend outside the service |
+| `CCD_REFERENCE_FAILED` | data-store's refusal of `updateSupportingDocuments`: case state (`Registered` only), the system user's role | edit the CCD case by hand |
+| `LOCAL_FILE_UNREMOVED` | `DOCUMENT_STORE_ROOT` mounted, the key valid, file permissions | delete the file by hand and call it done |
+| `LOCAL_COMPLETION_REFUSED` | the database refused completion (an audit, note or trigger failure); the remote steps are already `Done` | delete the row by hand: the audit and note would be lost |
+
+**There is no supported resolution route yet.** Unlike application deletion's `confirm-cdam-purge.sql`, no reviewed
+operator statement or endpoint moves a `NeedsAttention` document request on, and V51's triggers refuse rewriting
+admission's half. A request needing attention stays visibly unresolved with its evidence. Settling one (marking a
+confirmed step `Done` and requeueing, with an audited operator event) is follow-up work and needs its own reviewed
+script and test; do not improvise one in production. A step reset to `Pending` would resend a delete whose second
+answer, a 404, proves nothing.
+
+## Rehearsal
+
+Artifacts only; nothing here has been run against a live environment. The script is
+[`DOCUMENT-DELETION-SMOKE.md`](DOCUMENT-DELETION-SMOKE.md):
+
+- **AAT, filesystem store**: a disposable fixture application and document, proving the in-request success, the
+  `DOCUMENT_IN_USE` refusal, the replay, the note and both audit events, and the file's absence.
+- **Prod, CDAM**: a Delivery Manager creates a disposable test application, uploads a test document, deletes it with a
+  reason, confirms the note, the audit and CDAM's 404 for the document, then deletes the application through
+  application deletion. AAT cannot prove the CDAM path because it uses the filesystem store.
+
+## Final regression evidence (Task 7)
+
+Run 2026-11-26 at `7316940` plus Task 7's documentation, in the foreground, with
+`TESTCONTAINERS_RYUK_DISABLED=true JAVA_TOOL_OPTIONS=-XX:UseSVE=0`:
+
+| Command | Result |
+|---|---|
+| `./gradlew build test --rerun integration --rerun jacocoTestReport -I …/no-checkstyle.gradle --console=plain --no-watch-fs` | BUILD SUCCESSFUL in 4m 45s; `test` 5822 tests, 0 failures, 0 errors, 1 skipped; `integration` 32, 0 failures (counts from `build/test-results/{test,integration}` XML) |
+| `…/.context/scripts/checkstyle.sh .` | `checkstyle: OK` |
+| `git diff --check` | clean |
+| changed-code line coverage (JaCoCo XML for `test`+`integration`, lines added under `src/main/java` since `edb7052`) | 744 of 794 executable added lines, 93.7%, over 51 files; lowest `CreateDocumentDeletionRequest` 1/2 (a record's accessor), `DocumentDeletionFingerprint` 7/9, `DocumentDeletionWork` 110/123 |
+
+Failure and race suites in that run: `DocumentDeletionServiceTest` 18 (five two-transaction races),
+`DocumentDeletionWorkTest` 18 (unknown answers, budget, crashes, lease loss, duplicate finalisation, forced note/audit
+failure, concurrent removals), `DocumentDeletionApplicationDeletionTest` 8 (both admissions racing in each order),
+`CaseworkerDocumentDeletionControllerTest` 15, `CdamPermanentDeleteContractTest` 12, `CdamPermanentDeleteTest` 14,
+`DocumentDeletionMigrationTest` 12, `DocumentDeletionReasonTest` 32, `DeletionFinalisationTest` 10,
+`PermanentDocumentRemovalTest` 4, `WriteEndpointAuditCoverageTest` 4, `OpenAPIPublisherTest` 27; all passed, none
+skipped. Not run here: Sonar (Jenkins' gate, unchanged) and Jenkins' own Checkstyle tasks; `cftlibTest` is local
+and was not run for this feature, so the CCD document event against a real data-store is unproved until the
+rehearsal.
 
 ## Contract alignment with the plan
 

@@ -33,15 +33,20 @@ profile and/or upstream error propagation needs separate work.
 ## Delete failures
 
 `DocumentService.removeDocument` deletes the row in its transaction. After commit it submits the remaining CCD
-document collection, then requests a CDAM **soft delete** (`permanent=false`), both best effort. There is no public
-document-delete HTTP endpoint. A cleanup failure is logged with identifiers and fixed diagnostic prose; it does
+document collection, then requests a CDAM **soft delete** (`permanent=false`), both best effort. No HTTP route reaches it; staff
+deletion is the separate permanent path below. A cleanup failure is logged with identifiers and fixed diagnostic prose; it does
 not undo the row deletion. Preserve those IDs in the restricted incident record.
 
 A failed event can leave a stale CCD snapshot/search entry until a later successful event, while the live case
 view already excludes the deleted row. A failed remote delete can leave an orphaned binary. Have the platform
 operator verify the case and remote metadata before arranging an authorised cleanup; never use `permanent=true`
-as a retry. Permanent disposal is the retention plan's work. In dm-store, a permanent delete after a soft delete
-does not necessarily remove the blob, because the lookup already hides it.
+as a retry. In dm-store, a permanent delete after a soft delete does not necessarily remove the blob, because the
+lookup already hides it.
+
+`permanent=true` has one sender: staff document deletion (Steve, 2026-11-25), through `storage/CdamPermanentDelete`,
+only after its request is recorded, and directly, never after a soft delete. Its `204` is the only receipt; a `404`
+leaves the request `NeedsAttention` `CDAM_PURGE_UNPROVEN`. `removeDocument`, upload clean-up and application deletion
+stay soft deletes. Investigating a document deletion request is in `docs/DOCUMENT-DELETION.md`, *Runbook*.
 
 There is no local undelete and no dm-store undelete API. **Only the dm-store team can arrange restoration**;
 restoration of a blob alone does not reconstruct the deleted local row or CCD reference.

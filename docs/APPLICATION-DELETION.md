@@ -821,7 +821,8 @@ case's other children are. Admission inventories each one:
 - **A removed filesystem document** is a `LOCAL_DOCUMENT` line like any other: the worker removes it and verifies
   absence (`ALREADY_ABSENT` when the original unlink worked), so a failed unlink no longer leaves bytes behind.
 - **A removed CDAM document** is a `CDAM_REMOVED_DOCUMENT` line. dm-store's `/documents/delete` sweep skips
-  `deleted = true` documents, so CCD's disposer never reaches it, and this service never sends `permanent=true`. Once
+  `deleted = true` documents, so CCD's disposer never reaches it, and application deletion never sends `permanent=true` (only staff document
+  deletion does, for a live document, *Permanently deleted documents*). Once
   CCD has disposed of the case the request is `NeedsAttention` `CDAM_REMOVED_DOCUMENT_UNPURGED` and is **not**
   finalised: partial cleanup never reads as complete. The operator lists the ids
   (`SELECT locator FROM deedpoll_deletion_step WHERE request_id = … AND kind = 'CDAM_REMOVED_DOCUMENT' AND state =
