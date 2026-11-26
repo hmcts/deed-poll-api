@@ -34,8 +34,9 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "deedpoll_supportingdocument")
-// The deletion fence, by the row's case (DeletionFenceSql): a fenced case's children read as gone.
-@SQLRestriction(DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID)
+// The deletion fences (DeletionFenceSql): a fenced case's children, and a document a deletion request names, read
+// as gone.
+@SQLRestriction(DeletionFenceSql.DOCUMENT_RESTRICTION)
 @Getter
 @Setter
 public class DeedPollSupportingDocument {
@@ -94,6 +95,11 @@ public class DeedPollSupportingDocument {
 
     @Column(name = "storageUploadAttempts", nullable = false)
     private short storageUploadAttempts;
+
+    // The reviewed version (V51): its own BEFORE UPDATE trigger increments it when a reviewed column changes, so it
+    // is never written from here. Read it again after a write when a response needs it.
+    @Column(name = "version", nullable = false, insertable = false, updatable = false)
+    private long version = 1;
 
     @Column(name = "createdOn", nullable = false)
     private LocalDateTime createdOn;

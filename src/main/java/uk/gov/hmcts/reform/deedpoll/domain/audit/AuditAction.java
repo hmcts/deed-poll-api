@@ -37,7 +37,16 @@ public enum AuditAction {
     DOCUMENT_UPLOADED,
     DOCUMENT_CREATED,
     DOCUMENT_UPDATED,
+    /**
+     * The internal removal's event, and permanent document deletion's completion: recorded once, under the original
+     * requester, with the request's id and reason in its detail.
+     */
     DOCUMENT_DELETED,
+    /**
+     * A member of staff asked for a document to be deleted permanently; {@code DOCUMENT_DELETED} follows on
+     * completion. Carries the request's id and reason.
+     */
+    DOCUMENT_DELETION_REQUESTED,
     REFERRAL_CREATED,
     REFERRAL_WITHDRAWN,
     REFERRAL_CLOSED,

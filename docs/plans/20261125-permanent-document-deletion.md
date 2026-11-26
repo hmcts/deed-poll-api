@@ -236,11 +236,11 @@ Generate the full OpenAPI artifact using OpenAPIPublisherTest and OPENAPI_OUTPUT
 **Files:** new `domain/documents/deletion/` types/repository, next free Flyway migration, document entity/projections,
 `health/DeedPollSchema.java`, `domain/audit/AuditEntry.java`, audit vocabulary and migration-order tests.
 
-- [ ] Implement durable request/step and use coordination, version, uniqueness, actor/reason/fingerprint and redacted
+- [x] Implement durable request/step and use coordination, version, uniqueness, actor/reason/fingerprint and redacted
   toString; fence reads without losing recovery access. Keep request/cleanup inventory until confirmed completion.
-- [ ] Implement bounded plain-text reason validation and typed document-specific audit metadata. Preserve the
+- [x] Implement bounded plain-text reason validation and typed document-specific audit metadata. Preserve the
   existing application's reason/note checks. Define minimal completed receipt retention and case-disposal ownership.
-- [ ] Test schema constraints, rejected reason forms/Unicode, version changes, redaction, migration compatibility
+- [x] Test schema constraints, rejected reason forms/Unicode, version changes, redaction, migration compatibility
   and uniqueness using real Postgres. Include the schema/SDK migration-order health gates.
 
 ### Task 3: Authorised admission with in-use and version checks
@@ -332,6 +332,16 @@ Task 1 (2026-11-26): execution SHA `068e047` on `origin/master` `edb7052`; CDAM 
 re-sent safely). Gates: build green (test 5682/0 failed/1 skipped, integration 31/0), Checkstyle OK, diff check clean.
 Recorded deltas: success is 200 with a body (Task 4's "204" read as that case); open questions for Steve on deleting a
 generated deed (the V26 reservation survives it) and on a `Failed` row's unattached CDAM copy.
+Task 2 (2026-11-26): V51 (`V51__document_deletion_requests.sql`) adds the version column and trigger, the request
+and step tables, the immutability trigger, and the fence (entity restriction, deferred document/email triggers,
+V49's function on a new request). `domain/documents/deletion` holds the reason, fingerprint, statuses, failures and
+steps; `repository/DocumentDeletionRequestRepository` holds the native reads, including recovery's `fencedDocument`.
+`AuditEntry` gains typed `documentDeletionReason`/`documentDeletionRequestId` detail, and `AuditAction` gains
+`DOCUMENT_DELETION_REQUESTED`. Receipt retention: the reason and name are cleared at completion, and the request
+cascades with its case. Tests: `DocumentDeletionMigrationTest` (12, Postgres), `DocumentDeletionReasonTest` (32),
+`DocumentDeletionFingerprintTest` (2), `AuditEntryDocumentDeletionDetailTest` (3); `SdkMigrationOrderTest` now covers
+V1–V51, `DeedPollSchemaHealthTest` the two tables, and `DeletionFenceTest` the 14 fence triggers. Gates: build green
+(test 5731, 0 failed, 1 skipped; integration 31, 0 failed), Checkstyle OK, diff check clean.
 Previously: this plan had been checked structurally, not executed. Record source SHAs, contract proof, migrations,
 task validation, spec artifact, review findings and outstanding deployment evidence here. Keep checkboxes inside tasks.
 

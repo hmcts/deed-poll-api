@@ -394,14 +394,15 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("every fence trigger (V49, V50) names a column its table has, so none resolves a null target")
+    @DisplayName("every fence trigger (V49, V50, V51) names a column its table has, so none resolves a null target")
     void everyFenceTriggerNamesARealColumn() {
         List<Map<String, Object>> triggers = jdbc.queryForList("""
             SELECT c.relname AS "table", encode(t.tgargs, 'escape') AS args
               FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
              WHERE t.tgname = 'deedpoll_deletion_fence'
             """);
-        assertThat(triggers).as("V49's twelve and V50's removed-document tombstone").hasSize(13);
+        assertThat(triggers).as("V49's twelve, V50's removed-document tombstone and V51's document deletion request")
+            .hasSize(14);
         for (Map<String, Object> trigger : triggers) {
             String table = (String) trigger.get("table");
             String column = ((String) trigger.get("args")).split("\\\\000", -1)[0];

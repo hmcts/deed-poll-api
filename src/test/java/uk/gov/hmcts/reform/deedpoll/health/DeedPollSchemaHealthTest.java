@@ -142,7 +142,9 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             "deedpoll_request_budget",
             "deedpoll_deletion_request",
             "deedpoll_deletion_step",
-            "deedpoll_removed_document"
+            "deedpoll_removed_document",
+            "deedpoll_document_deletion_request",
+            "deedpoll_document_deletion_step"
         );
 
         @Test

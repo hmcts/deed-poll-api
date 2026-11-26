@@ -314,6 +314,32 @@ WireMock CDAM that models the sources above. It pins five behaviours:
 Run it with `./gradlew test --tests "uk.gov.hmcts.reform.deedpoll.storage.CdamPermanentDeleteContractTest"`
 (container-free).
 
+## Persistence (Task 2, V51)
+
+- **`deedpoll_document_deletion_request`**: one per document (`UNIQUE (document_id)`), its key unique within the case
+  (`UNIQUE (case_id, idempotency_key)`), inserted with `ON CONFLICT DO NOTHING` so a racing admission reads the winner.
+  It is `InProgress`, `NeedsAttention` or `Completed`, with V48's claim, completion and failure checks. A trigger
+  keeps admission's half fixed: the case, document, key, fingerprint, expected version and requester.
+- **The reason** (`DocumentDeletionReason`) is trimmed with `String.strip()` and is 1 to 500 code points. It
+  refuses control characters, line and paragraph separators, bidirectional controls and unpaired surrogates. The
+  column's check repeats what Postgres can check. Application deletion's `DeletionNote` rule is untouched. Audit
+  detail carries the reason under its own typed key, `documentDeletionReason`, beside `documentDeletionRequestId`.
+- **Minimal receipt.** The reason and the confirmed document name are held only until completion. The completion
+  transaction copies them into `DOCUMENT_DELETED` and the case note, and
+  `DocumentDeletionRequestRepository.complete` clears both and erases the steps' locators. It succeeds only when
+  every step is `Done`. A `Completed` row is frozen. It keeps what a replay needs: the key, the fingerprint, the
+  document id, the requester and the times.
+- **Case-disposal ownership.** The request references the case with `ON DELETE CASCADE` and its steps cascade from
+  it, so application deletion's finalisation disposes them with the case. The audit events keep the reason for the
+  audit's seven years. V49's fence function refuses a new request on a fenced case (insert only).
+- **`deedpoll_document_deletion_step`**: at most one each of `CCD_REFERENCE`, `CDAM_BINARY` and `LOCAL_FILE` per
+  request. Each step holds its locator until it is `Done`.
+- **The version** is `deedpoll_supportingdocument."version"` with its `BEFORE UPDATE` trigger, as specified above.
+  Existing rows start at 1, and the entity maps the column read-only.
+- **The fence.** The entity restriction is `DeletionFenceSql.DOCUMENT_RESTRICTION`. A deferred
+  `deedpoll_document_deletion_fence` trigger refuses an INSERT or UPDATE of a named document, and an email insert
+  whose personalisation names one on the same case. Recovery reads the row natively through `fencedDocument`.
+
 ## Contract alignment with the plan
 
 The routes sit beside today's resources: `POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests`
