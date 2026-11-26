@@ -54,6 +54,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class DeletionFinalisationTest extends AbstractPostgresContainerTest {
 
+    /** The cleanup worker's maxAttempts in these tests: the steps' tries and, since V53, finalisation's too. */
+    private static final int MAX_ATTEMPTS = 3;
     private static final CurrentUser DELIVERY_MANAGER =
         CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Dee Manager", "finalisation-dm");
     private static final LocalDateTime MODIFIED = LocalDateTime.of(2026, 11, 18, 9, 30, 15, 250_000_000);
@@ -103,8 +105,9 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
         StaticListableBeanFactory beans = new StaticListableBeanFactory();
         beans.addBean("store", new LocalFilesystemDocumentStore(documents.toString()));
         cleanup = new DeletionCleanup(work, requests, beans.getBeanProvider(LocalFilesystemDocumentStore.class),
-            transactions, new DeletionCleanupProperties(false, Duration.ofMinutes(5), 10, Duration.ofMinutes(5), 3,
-                                                        Duration.ofMinutes(1), POLL), finalisation, AuditClock::now);
+            transactions, new DeletionCleanupProperties(false, Duration.ofMinutes(5), 10, Duration.ofMinutes(5),
+                                                        MAX_ATTEMPTS, Duration.ofMinutes(1), POLL),
+            finalisation, AuditClock::now);
         jdbc.update("""
             update deedpoll_deletion_request set next_attempt_at = next_attempt_at + interval '100 years'
              where status in ('Pending', 'InProgress', 'AwaitingDisposal')
@@ -344,6 +347,49 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
             """, requestId, caseId, UUID.randomUUID().toString(), UUID.randomUUID(),
                     completed ? null : "Uploaded in error", completed ? null : "Evidence", status,
                     completed ? Timestamp.valueOf(AuditClock.now()) : null);
+    }
+
+    @Test
+    @DisplayName("a finalisation that fails on every pass stops at maxAttempts as NeedsAttention, not a retry for ever")
+    void persistentFinalisationFailureIsCapped() throws IOException {
+        String id = populated(false);
+        localDocument(id);
+        final DeletionRequest request = admit(id, "CREATED_IN_ERROR");
+        jdbc.execute("""
+            CREATE FUNCTION finalisation_test_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.action = 'CASE_DELETED' THEN
+                    RAISE EXCEPTION 'synthetic persistent failure';
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+            """);
+        jdbc.execute("""
+            CREATE TRIGGER finalisation_test_failure BEFORE INSERT ON deedpoll_audit_event
+                FOR EACH ROW EXECUTE FUNCTION finalisation_test_failure()
+            """);
+        final int cap = MAX_ATTEMPTS;
+
+        for (int pass = 1; pass < cap; pass++) {
+            assertThat(process()).as("pass %d", pass).hasValueSatisfying(made -> {
+                assertThat(made.status()).isEqualTo(DeletionStatus.InProgress);
+                assertThat(made.failure()).isNull();
+            });
+            due(request);
+        }
+        assertThat(process()).as("pass %d", cap).hasValueSatisfying(made -> {
+            assertThat(made.status()).isEqualTo(DeletionStatus.NeedsAttention);
+            assertThat(made.failure()).isEqualTo(DeletionFailure.LOCAL_FINALISATION_REFUSED);
+        });
+
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.NeedsAttention);
+        assertThat(jdbc.queryForObject("SELECT finalise_attempts FROM deedpoll_deletion_request WHERE id = ?",
+                                       Integer.class, request.id())).isEqualTo(cap);
+        assertThat(count("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", id)).as("nothing removed").isOne();
+        assertNoCompletion(id);
+        due(request);
+        assertThat(process()).as("a request needing attention is not claimed again").isEmpty();
     }
 
     @Test

@@ -128,6 +128,20 @@ public class DeletionWorkRepository {
             """, outcome.name(), stepId);
     }
 
+    /**
+     * Counts one failed local finalisation of the request (V53), for the worker that holds it.
+     *
+     * @return the request's failed finalisations so far, or 0 if the caller no longer holds it
+     */
+    public int finaliseFailed(UUID requestId, UUID owner) {
+        List<Integer> counted = jdbc.queryForList("""
+            update deedpoll_deletion_request set finalise_attempts = finalise_attempts + 1
+             where id = ? and owner = ?
+            returning finalise_attempts
+            """, Integer.class, requestId, owner);
+        return counted.isEmpty() ? 0 : counted.getFirst();
+    }
+
     /** A line no further try will remove; its locator is held for whoever investigates. */
     public int stepFailed(UUID stepId, DeletionStepOutcome outcome) {
         return jdbc.update("""
